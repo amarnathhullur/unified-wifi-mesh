@@ -25,6 +25,8 @@
 #include <cjson/cJSON.h>
 #include "em_network_topo.h"
 
+extern em_network_topo_t *g_network_topology;
+
 void em_network_topo_t::encode(cJSON *parent)
 {
 	cJSON *dev_obj, *child_obj, *radio_list_obj, *radio_obj, *bss_list_obj, *bss_obj, *bh_obj;
@@ -65,13 +67,17 @@ em_network_topo_t *em_network_topo_t::find_topology_by_bh_associated(mac_address
 	unsigned int i;
 	dm_sta_t *sta;
 	em_network_topo_t *topo;
+	mac_addr_str_t sta_mac_str;
 
+	dm_easy_mesh_t::macbytes_to_string(sta_mac, sta_mac_str);
 	for (i = 0; i < m_data_model->m_num_bss; i++) {
 		if (m_data_model->m_bss[i].m_bss_info.id.haul_type == em_haul_type_backhaul) {
 			sta = static_cast<dm_sta_t *> (hash_map_get_first(m_data_model->m_sta_map));
 			while (sta != NULL) {
 				if ((memcmp(sta->m_sta_info.id, sta_mac, sizeof(mac_address_t)) == 0) && 
-						(memcmp(sta->m_sta_info.bssid, m_data_model->m_bss[i].m_bss_info.id.bssid, sizeof(mac_address_t)) == 0)) {
+					(memcmp(sta->m_sta_info.bssid, m_data_model->m_bss[i].m_bss_info.id.bssid, sizeof(mac_address_t)) == 0)) {
+					printf("%s:%d: Found topology of sta mac: %s %p\n", __func__, __LINE__,
+						sta_mac_str, this);
 					return this;
 				}
 				sta = static_cast<dm_sta_t *> (hash_map_get_next(m_data_model->m_sta_map, sta));
@@ -85,6 +91,56 @@ em_network_topo_t *em_network_topo_t::find_topology_by_bh_associated(mac_address
 		}
 	}
 
+	return NULL;
+}
+
+em_network_topo_t *em_network_topo_t::find_topology_by_bh_associated(dm_easy_mesh_t *dm)
+{
+	mac_addr_str_t bss_mac_str;
+
+	// From the dm object, find the bssid mac address of the mesh_sta which is associated with the backhaul.
+	if (dm == NULL)	{
+		printf("%s:%d: dm is NULL, return NULL\n", __func__, __LINE__);
+		return NULL;
+	}
+	em_bss_info_t *bss = dm->get_bsta_bss_info();
+	if (bss == NULL) {
+		printf("%s:%d: Backhaul sta bss is not found, return NULL\n", __func__, __LINE__);
+		return NULL;
+	}
+	// From the bss info obtained, find the appropriate em_network_topo_t containing this bss and return that
+	mac_address_t bss_mac;
+	memcpy(bss_mac, bss->id.bssid, sizeof(mac_address_t));
+	dm_easy_mesh_t::macbytes_to_string(bss_mac, bss_mac_str);
+	printf("%s:%d: Looking for topology associated with bss mac: %s\n", __func__, __LINE__, bss_mac_str);
+	return g_network_topology->find_topology_by_bss_mac(bss_mac);
+}
+
+em_network_topo_t *em_network_topo_t::find_topology_by_bss_mac(mac_address_t bss_mac)
+{
+	unsigned int i;
+	mac_addr_str_t bss_mac_str;
+	em_network_topo_t *topo;
+
+	dm_easy_mesh_t::macbytes_to_string(bss_mac, bss_mac_str);
+	for (i = 0; i < m_data_model->m_num_bss; i++) {
+		if (memcmp(m_data_model->m_bss[i].m_bss_info.id.bssid, bss_mac, sizeof(mac_address_t)) == 0) {
+			printf("%s:%d: Found topology of bss mac: %s %p\n", __func__, __LINE__,
+				   bss_mac_str, this);
+			return this;
+		}
+	}
+	// If we reach here, it means we could not find the bss mac in the current topology so
+	// check recursively other topologies.
+	printf("%s:%d: Could not find bss mac: %s, continuing with other topologies\n",
+		   __func__, __LINE__, bss_mac_str);
+	for (i = 0; i < m_num_topologies; i++) {
+		if ((topo = m_topology[i]->find_topology_by_bss_mac(bss_mac)) != NULL) {
+			return topo;
+		}
+	}
+	printf("%s:%d: Could not find bss mac: %s in all topologies, return NULL\n",
+		   __func__, __LINE__, bss_mac_str);
 	return NULL;
 }
 
@@ -114,6 +170,11 @@ em_network_topo_t *em_network_topo_t::find_topology(dm_easy_mesh_t *dm)
 
 void em_network_topo_t::add_network_topo(dm_easy_mesh_t *dm)
 {
+	if (m_num_topologies >= EM_MAX_NETWORKS) {
+		printf("%s:%d: Cannot add more topologies, max limit reached\n", __func__, __LINE__);
+		return;
+	}
+	printf("%s:%d: Adding new topology for data model: %p\n", __func__, __LINE__, dm);
 	m_topology[m_num_topologies] = new em_network_topo_t(dm);
 	m_num_topologies++;
 }
@@ -123,16 +184,21 @@ void em_network_topo_t::add(dm_easy_mesh_t *dm)
 	em_network_topo_t *topo;
 
 	// find the BH bss where al_mac of this device of data model is attached to.
+#ifndef AL_SAP
 	if ((topo = find_topology_by_bh_associated(dm->m_device.m_device_info.intf.mac)) != NULL) {
+#else
+	if ((topo = find_topology_by_bh_associated(dm)) != NULL) {
+#endif
+		printf("%s:%d: Found topology in backhaul association tree, adding to it\n", __func__, __LINE__);
 		topo->add_network_topo(dm);
-	} else {
+	}
+	else {
 		printf("%s:%d: Could not find topology in backhaul association tree, must be ethernet\n", __func__, __LINE__);
 		this->add_network_topo(dm);
 	}
-	
 }
 
-void em_network_topo_t::remove(dm_easy_mesh_t *dm)
+void em_network_topo_t::remove(dm_easy_mesh_t *dm, bool delete_topo)
 {
 	unsigned int i, index = 0;
 	bool found = false;
@@ -144,12 +210,13 @@ void em_network_topo_t::remove(dm_easy_mesh_t *dm)
 			break;
 		}
 	} 
-
+    //TBD: Should also consider recursively checking within topologies
 	if (found == false) {
 		return;
 	}
 
-	delete m_topology[i];
+	if (delete_topo)
+		delete m_topology[i];
 
 	for (i = index; i < m_num_topologies - 1; i++) {
 		m_topology[i] = m_topology[i + 1];
@@ -162,12 +229,14 @@ em_network_topo_t::em_network_topo_t(dm_easy_mesh_t *dm)
 {
 	m_num_topologies  = 0;
 	m_data_model = dm;
+	memset(m_topology, 0, sizeof(m_topology));
 }
 
 em_network_topo_t::em_network_topo_t()
 {
 	m_data_model = NULL;
 	m_num_topologies  = 0;
+	memset(m_topology, 0, sizeof(m_topology));
 }
 
 em_network_topo_t::~em_network_topo_t()

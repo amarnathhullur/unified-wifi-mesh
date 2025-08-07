@@ -58,6 +58,8 @@
 #include "em_cmd_get_mld_config.h"
 #include "em_cmd_mld_reconfig.h"
 
+extern em_network_topo_t *g_network_topology;
+
 int dm_easy_mesh_ctrl_t::analyze_sta_link_metrics(em_cmd_t *pcmd[])
 {
     int num = 0;
@@ -1975,18 +1977,26 @@ int dm_easy_mesh_ctrl_t::update_tables(dm_easy_mesh_t *dm)
 void dm_easy_mesh_ctrl_t::update_network_topology()
 {
     dm_easy_mesh_t *dm;
+    mac_addr_str_t dev_mac_str;
 
-    assert(m_topology != NULL);
+    assert(g_network_topology != NULL);
     dm = get_first_dm();
     while (dm != NULL) {
         if (dm->get_colocated() == false) {
-            if (m_topology->find_topology(dm) == NULL) {
-                m_topology->add(dm);
+            if (g_network_topology->find_topology(dm) == NULL) {
+                dm_easy_mesh_t::macbytes_to_string(dm->m_device.m_device_info.intf.mac, dev_mac_str);
+                printf("%s:%d: [AH] Add dm:%p, mac:%s bss:%d to topology\n", __func__, __LINE__, dm, dev_mac_str, dm->get_num_bss());
+                g_network_topology->add(dm);
+            } else {
+                //Update the existing topology with the latest information.
+                dm_easy_mesh_t::macbytes_to_string(dm->m_device.m_device_info.intf.mac, dev_mac_str);
+                printf("%s:%d: [AH] dm:%p, mac:%s bss:%d already in topology\n", __func__, __LINE__, dm, dev_mac_str, dm->get_num_bss());
+                g_network_topology->remove(dm, false);
+                g_network_topology->add(dm);
             }
         }
         dm = get_next_dm(dm);
     }
-
 }
 
 void dm_easy_mesh_ctrl_t::init_network_topology()
@@ -2000,23 +2010,27 @@ void dm_easy_mesh_ctrl_t::init_network_topology()
             m_topology = new em_network_topo_t(dm);
             set_network_initialized();
             dm_easy_mesh_t::macbytes_to_string(dm->m_device.m_device_info.intf.mac, dev_mac_str);
-            printf("%s:%d: Root: %s  added to network topology\n", __func__, __LINE__, dev_mac_str);
+            printf("%s:%d: Root: %s added to network topology\n", __func__, __LINE__, dev_mac_str);
             break;
         }
         dm = get_next_dm(dm);
     }
-
     assert(m_topology != NULL);
+    //Store m_topology in global variable as the root node.
+    g_network_topology = m_topology;
+    printf("%s:%d: [AH] Root topology dm:%p mac:%s, bss:%d\n", __func__, __LINE__, dm, dev_mac_str, dm->get_num_bss());
 
-    dm = get_first_dm();
-    while (dm != NULL) {
-        if (dm->get_colocated() == false) {
-            if (m_topology->find_topology(dm) == NULL) {
-                m_topology->add(dm);
-            }
-        }
-        dm = get_next_dm(dm);
-    }
+    //dm = get_first_dm();
+    //while (dm != NULL) {
+    //    if (dm->get_colocated() == false) {
+    //        if (m_topology->find_topology(dm) == NULL) {
+    //            dm_easy_mesh_t::macbytes_to_string(dm->m_device.m_device_info.intf.mac, dev_mac_str);
+    //            printf("%s:%d: [AH] Add dm:%p mac:%s, bss:%d to topology\n", __func__, __LINE__, dm, dev_mac_str, dm->get_num_bss());
+    //            m_topology->add(dm);
+    //        }
+    //    }
+    //    dm = get_next_dm(dm);
+    //}
 }
 
 

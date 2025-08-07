@@ -1298,7 +1298,9 @@ public:
 	 *
 	 * @param[in] num The number of BSS to set.
 	 */
-	void set_num_bss(unsigned int num) { m_num_bss = num; }
+	void set_num_bss(unsigned int num) { m_num_bss = num;
+		printf("%s:%d: [AH] dm:%p bss:%d\n", __func__, __LINE__, this, m_num_bss);
+    }
     
 	/**!
 	 * @brief Sets the number of BSS (Basic Service Set) for the given mesh instance.

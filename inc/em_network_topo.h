@@ -48,6 +48,39 @@ public:
 	em_network_topo_t *find_topology_by_bh_associated(mac_address_t sta);
 	
 	/**!
+	 * @brief Finds the network topology associated with a given data model.
+	 *
+	 * This function searches within the data model, the associated backhaul
+	 * sta and returns the network topology of the corresponding bssID which is
+	 * associated with that sta. This is required when the AL_SAP define is
+	 * enabled as the al_interface is associated with a virtual MAC address
+	 *
+	 * @param[in] dm The data model for which the network topology is to be found.
+	 *
+	 * @returns A pointer to the network topology associated with the given data model.
+	 * @retval NULL if no associated topology is found.
+	 *
+	 */
+	em_network_topo_t *find_topology_by_bh_associated(dm_easy_mesh_t *dm);
+
+	/**!
+	 * @brief Finds the network topology associated with a given BSS MAC address.
+	 *
+	 * This function searches for and returns the network topology that is associated
+	 * with the specified BSS MAC address.
+	 *
+	 * @param[in] bss_mac The MAC address of the BSS for which the network topology
+	 *                    is to be found.
+	 *
+	 * @returns A pointer to the network topology associated with the given BSS MAC address.
+	 * @retval NULL if no associated topology is found.
+	 *
+	 * @note Ensure that the BSS MAC address provided is valid and corresponds to a BSS
+	 *       within the network.
+	 */
+	em_network_topo_t *find_topology_by_bss_mac(mac_address_t bss_mac);
+
+	/**!
 	 * @brief Finds the network topology based on the provided EasyMesh data.
 	 *
 	 * This function searches for and returns the network topology structure
@@ -96,7 +129,7 @@ public:
 	 * @note Ensure that the `dm` pointer is valid and properly initialized
 	 * before calling this function.
 	 */
-	void remove(dm_easy_mesh_t *dm);
+	void remove(dm_easy_mesh_t *dm, bool delete_topo = true);
 
 	
 	/**!

@@ -3663,6 +3663,9 @@ void em_configuration_t::process_msg(unsigned char *data, unsigned int len)
             if ((get_service_type() == em_service_type_ctrl) && (get_state() == em_state_ctrl_topo_sync_pending)) {
 			    if (handle_topology_response(data, len) == 0) {
 					set_state(em_state_ctrl_topo_synchronized);
+                    printf("%s:%d em_msg_type_topo_resp handle success, state: %s\n", __func__, __LINE__, em_t::state_2_str(get_state()));
+                    //update network topology here
+                    get_mgr()->update_network_topology();
 				} else {
 					printf("%s:%d em_msg_type_topo_resp handle failed \n", __func__, __LINE__);
 				}

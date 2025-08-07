@@ -517,6 +517,7 @@ void dm_easy_mesh_list_t::put_bss(const char *key, const dm_bss_t *bss)
 	if ((pbss = dm->find_matching_bss(&id)) == NULL) {
 		pbss = &dm->m_bss[dm->m_num_bss];
 		dm->m_num_bss++;
+        printf("%s:%d: [AH] put_bss dm:%p mac:%s, bss:%d\n", __func__, __LINE__, dm, dev_mac_str, dm->get_num_bss());
 	}	
 
 	*pbss = *bss;

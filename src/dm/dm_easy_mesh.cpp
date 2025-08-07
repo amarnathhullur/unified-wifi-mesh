@@ -180,6 +180,7 @@ int dm_easy_mesh_t::commit_config(dm_easy_mesh_t& dm, em_commit_target_t target)
 					m_num_bss = m_num_bss + 1;
 					macbytes_to_string(dm.get_bss(i)->get_bss_info()->bssid.mac,mac_str);
 					printf("%s:%d New BSS %s configuration updated  no of bss=%d vapname=%s\n", __func__, __LINE__,mac_str,m_num_bss, dm.get_bss(i)->get_bss_info()->bssid.name);
+                    printf("%s:%d: [AH] em_commit_target_bss dm:%p mac:%s, bss:%d\n", __func__, __LINE__, this, mac_str, get_num_bss());
 				}
 			}
 		}
