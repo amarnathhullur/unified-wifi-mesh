@@ -55,10 +55,10 @@ void em_orch_ctrl_t::orch_transient(em_cmd_t *pcmd, em_t *em)
 	
 	switch (pcmd->m_type) {
 		case em_cmd_type_em_config:
-    		if (stats->time > (EM_MAX_CMD_GEN_TTL + EM_MAX_CMD_EXT_TTL)) {
-        		printf("%s:%d: Canceling cmd: %s because time limit exceeded\n", __func__, __LINE__, pcmd->get_cmd_name());
-        		cancel_command(pcmd->get_type());
-    		}
+			if (stats->time > EM_MAX_CMD_GEN_TTL) {
+				printf("%s:%d: Canceling cmd: %s because time limit exceeded\n", __func__, __LINE__, pcmd->get_cmd_name());
+				cancel_command(pcmd->get_type());
+			}
 			break;
 
 		default:

@@ -1385,7 +1385,6 @@ int em_configuration_t::handle_bsta_radio_cap(unsigned char *buff, unsigned int 
 {
     dm_easy_mesh_t *dm = get_data_model();
     em_bh_sta_radio_cap_t *bsta_radio_cap = reinterpret_cast<em_bh_sta_radio_cap_t*>(buff);
-    mac_addr_str_t mac_str, r_str;
 
     em_printfout("Rcvd Backhaul STA Radio Capabilities received, sta mac: %s for radio: %s, mac present?: %d",
         util::mac_to_string(bsta_radio_cap->bsta_addr).c_str(),
@@ -5402,6 +5401,21 @@ void em_configuration_t::process_ctrl_state()
             break;
     }
 
+}
+
+void em_configuration_t::check_misconfigured_ems()
+{
+    hash_map_t* em_map = get_mgr()->m_em_map;
+    em_t* em = static_cast<em_t *>(hash_map_get_first(em_map));
+    dm_network_t network;
+
+    while (em != NULL) {
+        if (em->get_state() == em_state_ctrl_misconfigured) {
+            em->em_configuration_t::send_autoconfig_renew_msg();
+        }
+        em = static_cast<em_t *>(hash_map_get_next(em_map, em));
+    }
+    return;
 }
 
 em_configuration_t::em_configuration_t()

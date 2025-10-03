@@ -170,6 +170,8 @@ void em_t::orch_execute(em_cmd_t *pcmd)
             m_sm.set_state(em_state_ctrl_channel_query_pending);
             break;
         case em_cmd_type_onewifi_cb:
+            em_printfout("OneWiFi Callback received for radio:%s, change to em_state_agent_onewifi_bssconfig_ind\n",
+                util::mac_to_string(m_ruid.mac).c_str());
             m_sm.set_state(em_state_agent_onewifi_bssconfig_ind);
             break;
         case em_cmd_type_sta_assoc:
@@ -537,6 +539,11 @@ void em_t::proto_run()
         } else if (rc == ETIMEDOUT) {
             pthread_mutex_unlock(&m_iq.lock);
             proto_timeout();
+            //Check periodically whether there are any em's in misconfigured state
+            //Trigger autoconfig_renew if any misconfigured em found
+            if ((m_service_type == em_service_type_ctrl) && (time_to_wait.tv_sec % (EM_MAX_CMD_GEN_TTL *2) == 0)) {
+                em_configuration_t::check_misconfigured_ems();
+            }
             pthread_mutex_lock(&m_iq.lock);
         } else {
             printf("%s:%d em exited with rc - %d\n",__func__,__LINE__,rc);

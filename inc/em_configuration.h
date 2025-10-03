@@ -2148,6 +2148,17 @@ public:
 	 */
 	void set_topo_query_tx_count(unsigned int cnt) { m_topo_query_tx_cnt = cnt; }
 
+	/**!
+	 * @brief Checks for misconfigured em objects.
+	 *
+	 * This function verifies if there are any misconfigurations in the em object.
+	 * It performs necessary checks and validations to ensure proper configuration.
+	 *
+	 * @note This function does not take any parameters and does not return a value.
+	 * It is intended to be called to perform internal checks within the system.
+	 */
+	void check_misconfigured_ems();
+
 	virtual bool get_is_dpp_onboarding() = 0;
 
 	virtual void set_is_dpp_onboarding(bool is_onboarding) = 0;

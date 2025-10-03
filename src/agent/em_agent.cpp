@@ -1067,7 +1067,6 @@ bool em_agent_t::can_onboard_additional_aps()
 void em_agent_t::input_listener()
 {
     wifi_bus_desc_t *desc;
-    dm_easy_mesh_t dm;
     raw_data_t data;
     int num_retry = 0;
     bus_error_t bus_error_val;
@@ -1467,7 +1466,13 @@ em_t *em_agent_t::find_em_for_msg_type(unsigned char *data, unsigned int len, em
 					if ((em->get_state() != em_state_agent_autoconfig_renew_pending) && (em->get_state() !=em_state_agent_wsc_m2_pending) && (em->get_state() != em_state_agent_owconfig_pending) ) {
 						found = true;
 						break;
-					} else {
+					} else if (em->get_state() == em_state_agent_owconfig_pending) {
+                        em_printfout("em_msg_type_autoconf_renew : Found matching band%d with radio:%s still in owconfig_pending state, set state to unconfigured",
+                            band, util::mac_to_string(em->get_radio_interface_mac()).c_str());
+                        found = true;
+                        em->set_state(em_state_agent_unconfigured);
+                        break;
+                    } else {
 						printf("%s:%d: Found matching band%d but incorrect em state %d\n", __func__, __LINE__, band, em->get_state());
 						return NULL;
 					}

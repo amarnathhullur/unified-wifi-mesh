@@ -317,7 +317,6 @@ public:
 	 */
 	void input_listener();
 
-
 	bool is_agent_dpp_onboarding() override {
 		return do_start_dpp_onboarding;
 	}
