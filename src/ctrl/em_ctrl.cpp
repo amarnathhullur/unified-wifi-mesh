@@ -972,7 +972,7 @@ void em_ctrl_t::start_complete()
         return;
     }
 
-	intf = m_data_model.get_ctrl_al_interface(const_cast<char*>(GLOBAL_NET_ID));
+	intf = m_data_model.get_colocated_agent_interface();
 	assert(intf != NULL);
 
 	dm_easy_mesh_t::macbytes_to_string(intf->mac, al_mac_str);
@@ -1064,7 +1064,7 @@ AlServiceAccessPoint* em_ctrl_t::al_sap_register(const std::string& data_socket_
         uint8_t* al_mac_bytes = g_al_mac_sap.data();
         em_printfout("AL SAP registration successful, AL MAC: %s", util::mac_to_string(al_mac_bytes).c_str());
 
-        m_data_model.set_colocated_agent_interface_mac(al_mac_bytes);
+        //m_data_model.set_colocated_agent_interface_mac(al_mac_bytes);//todo: revisit
         m_data_model.set_dev_interface_mac(al_mac_bytes);
     } else {
         std::cout << "Registration failed with error: " << static_cast<int>(result) << std::endl;

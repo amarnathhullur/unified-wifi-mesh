@@ -111,7 +111,7 @@ public:
 	 *
 	 * @note The returned MAC address is part of the network information structure.
 	 */
-	unsigned char *get_controller_interface_mac() { return m_net_info.ctrl_id.mac; }
+	unsigned char *get_controller_interface_mac() { return m_net_info.ctrl_id.mac; }// validate db and data model values are in sync
     
 	/**!
 	 * @brief Sets the controller ID using the provided MAC address.

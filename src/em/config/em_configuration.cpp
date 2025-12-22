@@ -1695,7 +1695,8 @@ int em_configuration_t::handle_topology_response(unsigned char *buff, unsigned i
         memset(dm->m_device.m_device_info.backhaul_alid.mac, 0, sizeof(mac_address_t));
     } else {
         em_printfout("MAC address not found on any interface.");
-        memcpy(dm->m_device.m_device_info.backhaul_alid.mac, dm->get_ctrl_al_interface_mac(), sizeof(mac_address_t));
+        //TODO: change to eth1-virt-peer, of the connected device's device ID
+        memcpy(dm->m_device.m_device_info.backhaul_alid.mac, dm->get_controller_interface_mac(), sizeof(mac_address_t));
     }
 
     em_printfout("updated dm dev_info's colocated: %d backhaul_mac: %s and backhaul_alid: %s", dm->get_colocated(),
@@ -3720,6 +3721,7 @@ int em_configuration_t::handle_wsc_m1(unsigned char *buff, unsigned int len)
             //printf("%s:%d: Manufacturer:%s\n", __func__, __LINE__, dev_info.serial_number);
             if( dm->get_colocated() == false )
             {
+                //TODO: revist needed after colocated points to eth1-virt-peer
                 memcpy(dm->m_device.m_device_info.backhaul_alid.mac, dm->get_ctrl_al_interface_mac(), sizeof(mac_address_t));
             }
 

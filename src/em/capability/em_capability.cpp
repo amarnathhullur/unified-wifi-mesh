@@ -824,6 +824,7 @@ int em_capability_t::handle_bsta_cap_report(unsigned char *buff, unsigned int le
             if( dm->get_colocated() == true ) {
                 //Trigger event to request backhaul cap report, as this would handle the initial onboarding scenario, use the al em for this
                 //check if its the same device
+                //todo: recheck this
                 if ( (memcmp(dev->id.dev_mac, dm->get_ctrl_al_interface_mac(), sizeof(mac_address_t)) != 0) ) {
                     em_printfout("Cap: Update backhaul mac for Device id: %s",
                         util::mac_to_string(dev->id.dev_mac).c_str());

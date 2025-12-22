@@ -1453,12 +1453,12 @@ int dm_easy_mesh_ctrl_t::get_wifi_reset_config(cJSON *parent, char *key)
 
     // Prioritize the interface list depending on platform
     if ((intf = dm.get_prioritized_interface(platform)) == NULL) {
-        intf = dm.get_interface_by_index(0);
+        intf = dm.get_interface_by_index(0);//Todo: check why index o as it is taking brlan0
     }
 
     dm.set_ctrl_al_interface_mac(intf->mac);
     dm.set_ctrl_al_interface_name(intf->name);
-    dm.set_controller_id(intf->mac);
+    dm.set_controller_id(intf->mac);//brlan0, sud be set to eth0-virt-peer
     dm.set_controller_intf_media(intf->media);
 
     //dm.print_config();
@@ -2034,7 +2034,8 @@ void dm_easy_mesh_ctrl_t::init_network_topology()
 
     dm = get_first_dm();
     while (dm != NULL) {
-        if (dm->get_colocated() == true) {
+        //if (dm->get_colocated() == true) {
+        if (dm->is_controller() == true) {
             m_topology = new em_network_topo_t(dm);
             set_network_initialized();
             dm_easy_mesh_t::macbytes_to_string(dm->m_device.m_device_info.intf.mac, dev_mac_str);
