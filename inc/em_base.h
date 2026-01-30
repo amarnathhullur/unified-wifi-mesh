@@ -115,6 +115,10 @@ extern "C"
 #define EM_AUTH_TYPES (EM_AUTH_OPEN | EM_AUTH_WPAPSK | EM_AUTH_SHARED | \
             EM_AUTH_WPA | EM_AUTH_WPA2 | EM_AUTH_WPA2PSK | EM_AUTH_SAE_AKM8 | \
             EM_AUTH_DPP_AKM | EM_AUTH_SAE_AKM24 )
+
+#define EM_AUTH_ENHANCED_OPEN 0x1000
+#define EM_AUTH_WPA3_PERSONAL EM_AUTH_SAE_AKM8
+#define EM_AUTH_WPA3_TRANSITION EM_AUTH_SAE_AKM8 | EM_AUTH_WPA2PSK
     
 /* Encryption Type Flags */
 #define EM_ENCR_NONE 0x0001
@@ -129,6 +133,21 @@ extern "C"
 #define EM_RF_50GHZ 0x02
 #define EM_RF_60GHZ 0x04
 #define EM_RF_6GHZ  0x08
+
+/* Multi-AP Extension Subelement constants */
+#define EM_MULTI_AP_EXT_SUBELEM_LEN         0x01
+#define EM_MULTI_AP_EXT_SUBELEM_ID          0x06
+#define EM_MULTI_AP_EXT_BSS_TEARDOWN        0x10
+#define EM_MULTI_AP_EXT_BSS_FRONTHAUL       0x20
+#define EM_MULTI_AP_EXT_BSS_BACKHAUL        0x40
+#define EM_MULTI_AP_EXT_BSS_BSTA            0x80
+#define EM_MULTI_AP_EXT_R1_BSTA_DISALLOW    0x08
+#define EM_MULTI_AP_EXT_R2_BSTA_DISALLOW    0x04
+
+/*  Bands */
+#define EM_BAND_2_4GHZ_STR   "2.4"
+#define EM_BAND_5GHZ_STR     "5"
+#define EM_BAND_6GHZ_STR     "6"
 
 /* Config Methods */
 #define EM_CONFIG_USBA 0x0001
@@ -150,13 +169,15 @@ extern "C"
 #define EM_CONN_ESS 0x01
 #define EM_CONN_IBSS 0x02
 
+/* Channel Preference Flags*/
+#define EM_CH_PREF_NON_OPERABLE 0x00
+
 #define EM_MAX_BANDS    3
 #define EM_MAX_BSSS     EM_MAX_BANDS*8  
 #define EM_MAX_AKMS     10
 #define EM_MAX_HAUL_TYPES   8
 #define EM_MAX_OPCLASS  64
 #define EM_MAX_AP_MLD   64
-#define EM_MAX_BSTA_MLD   64
 #define EM_MAX_ASSOC_STA_MLD   64
 #define EM_MAX_PRE_SET_CHANNELS   6
 
@@ -174,9 +195,17 @@ extern "C"
 #define EM_KEY_FILE	"/nvram//test_cert.key"
 
 #define EM_CFG_FILE "/nvram/EasymeshCfg.json"
+#define EM_VENDOR_OUI_SIZE 3
 
 #define EM_MAX_SSID_LEN                33 
 #define EM_MAX_WIFI_PASSWORD_LEN       65 
+
+/* WSC Message TLV LENs */
+#define EM_CONN_TYPE_FLAGS_LEN         0x01
+#define EM_PRIMARY_DEV_TYPE_LEN        0x08
+#define EM_OS_VERSION_LEN              0x04
+#define EM_KEY_WRAP_TLV_LEN            0x08
+
 /* Disallowed STAList */
 #define EM_MSCS_DISALLOWED_STA      10
 #define EM_SCS_DISALLOWED_STA       10
@@ -344,6 +373,7 @@ typedef enum {
     em_freq_band_24,    //IEEE-1905-1-2013 table 6-23
     em_freq_band_5,
     em_freq_band_60,
+    em_freq_band_6,     // Extended for 6GHz Band
     em_freq_band_unknown
 } em_freq_band_t;
 
@@ -607,10 +637,24 @@ typedef enum {
     em_tlv_type_vendor_sta_metrics = 0xf1,
     em_tlv_vendor_plolicy_cfg = 0xf2,
     em_tlv_type_vendor_operational_bss = 0xf3,
-
-	// RDK Proprietary TLV values
-	em_tlv_type_rdk_radio_enable = 0xfe,
 } em_tlv_type_t;
+
+typedef enum {
+    em_channel_pref_reason_unspecified = 0x00,
+    em_channel_pref_reason_proximate_non_80211_interferer = 0x01,
+    em_channel_pref_reason_intra_network_obss_interference_mgmt = 0x02,
+    em_channel_pref_reason_external_network_obss_interference_mgmt = 0x03,
+    em_channel_pref_reason_reduced_coverage = 0x04,
+    em_channel_pref_reason_reduced_throughput = 0x05,
+    em_channel_pref_reason_in_device_interferer = 0x06,
+    em_channel_pref_reason_operation_disallowed_dfs_radar_detection = 0x07,
+    em_channel_pref_reason_operation_prevent_backhaul_shared_radio = 0x08,
+    em_channel_pref_reason_immediate_operation_possible_dfs = 0x09,
+    em_channel_pref_reason_dfs_state_unknown_cac_not_run_or_expired = 0x0a,
+    em_channel_pref_reason_controller_dfs_clear_indication = 0x0b,
+    em_channel_pref_reason_operation_disallowed_regulatory_restriction = 0x0c,
+    em_channel_pref_reason_change_due_to_available_spectrum_inquiry = 0x0d
+} em_channel_pref_reason_t;
 
 typedef struct {
     unsigned short qmid;
@@ -1834,7 +1878,9 @@ typedef struct {
 } __attribute__((__packed__)) em_dpp_chirp_value_t;
 
 typedef struct {
-    unsigned char   value[EM_CTRL_CAP_SZ];
+    uint8_t reserved : 6;              // Bits 6-0: Reserved
+    uint8_t early_ap_capability : 1;   // Bit 6: Prefers to receive an Early AP Capability Report
+    uint8_t kibmib_counter : 1;        // Bit 7: Sender supports KiB / MiB byte counters
 } __attribute__((__packed__)) em_ctrl_cap_t;
 
 typedef struct {
@@ -1911,9 +1957,13 @@ typedef enum {
     attr_id_vendor_ext,
     attr_id_version,
     attr_id_primary_device_type = 0x1054,
-	attr_id_haul_type,
-	attr_id_no_of_haul_type,
 } data_elem_attr_id_t;
+
+typedef enum {
+    // Vendor Extension Attribute for Haul Type with data
+    // of 1 byte having value corresponding to em_haul_type_t
+    vendor_ext_attr_id_haul_type = 0x01,
+} vendor_ext_attr_id_t;
 
 typedef enum {
     em_state_agent_unconfigured,
@@ -1925,6 +1975,7 @@ typedef enum {
     em_state_agent_onewifi_bssconfig_ind,
 	em_state_agent_autoconfig_renew_pending,
     em_state_agent_topo_synchronized,
+    em_state_agent_ap_cap_report,
 	em_state_agent_channel_pref_query,
 	em_state_agent_channel_selection_pending,
 	em_state_agent_channel_select_configuration_pending,
@@ -1934,7 +1985,6 @@ typedef enum {
 	
 	// Transient agent stats
     em_state_agent_topology_notify,
-    em_state_agent_ap_cap_report,
     em_state_agent_client_cap_report,
     em_state_agent_sta_link_metrics_pending,
     em_state_agent_steer_btm_res_pending,
@@ -2182,6 +2232,7 @@ typedef struct {
     mac_address_t   mobility_domain;
     unsigned char   num_hauls;
     em_haul_type_t haul_type[EM_MAX_HAUL_TYPES];   
+    em_string_t auth_type;
 } em_network_ssid_info_t;
 
 typedef enum {
@@ -2420,7 +2471,7 @@ typedef struct {
     bool  is_bsta_config;
     mac_address_t  mld_mac_addr;
     bool  tid_to_link_map_neg;
-    unsigned char  num_mapping;
+    unsigned short  num_mapping;
     em_tid_to_link_map_info_t  tid_to_link_mapping[EM_MAX_AP_MLD];
 } em_tid_to_link_info_t;
 
@@ -2569,11 +2620,6 @@ typedef struct {
 } __attribute__((__packed__)) em_bsta_mld_t;
 
 typedef struct {
-    unsigned char num_bsta_mld;
-    em_bsta_mld_t bsta_mld[0];
-} __attribute__((__packed__)) em_bsta_mld_config_t;
-
-typedef struct {
     bssid_t bssid;
     mac_addr_t affiliated_sta_mac_addr;
     unsigned char reserved1[19];
@@ -2591,11 +2637,6 @@ typedef struct {
     unsigned char num_affiliated_sta;
     em_affiliated_sta_mld_t affiliated_sta_mld[0];
 } __attribute__((__packed__)) em_assoc_sta_mld_t;
-
-typedef struct {
-    unsigned char num_assoc_sta_mld;
-    em_assoc_sta_mld_t assoc_sta_mld[0];
-} __attribute__((__packed__)) em_assoc_sta_mld_config_report_t;
 
 typedef struct {
     unsigned char reserved4 : 7;
@@ -2620,7 +2661,7 @@ typedef struct {
     unsigned char reserved2 : 7;
     unsigned char tid_to_link_map_negotiation : 1;
     unsigned char reserved3[22];
-    unsigned char num_mapping;
+    unsigned short num_mapping;
     em_tid_to_link_mapping_t tid_to_link_mapping[0];
 } __attribute__((__packed__)) em_tid_to_link_map_policy_t;
 
@@ -3271,6 +3312,19 @@ typedef struct{
         em_haul_type_t haul_type;
         em_freq_band_t freq_band;
 }em_dev_test_info;
+
+typedef struct {
+    const char *name;
+    uint32_t hex;
+} SecurityTypeMap;
+
+static const SecurityTypeMap securityTypeMap[] = {
+    { "Open",            EM_AUTH_OPEN },
+    { "WPA2 Personal",   EM_AUTH_WPA2 },
+    { "Enhanced Open",   EM_AUTH_ENHANCED_OPEN },
+    { "WPA3 Personal",   EM_AUTH_WPA3_PERSONAL },
+    { "WPA3 Transition", EM_AUTH_WPA3_TRANSITION }
+};
 
 #ifndef SSL_KEY
 #if OPENSSL_VERSION_NUMBER < 0x30000000L

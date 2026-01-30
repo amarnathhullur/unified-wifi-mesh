@@ -60,6 +60,7 @@ public:
     dm_device_t *get_dm_dev(mac_address_t dev_mac, mac_address_t bmac);
     dm_radio_t *get_dm_radio(dm_easy_mesh_t *dm, char *instance, bool is_num);
     dm_sta_t *get_dm_bh_sta(dm_easy_mesh_t *dm, dm_radio_t *radio);
+    const char* get_table_instance(const char *src, char *instance, size_t max_len, bool *is_num);
 
     bus_error_t network_get(char *event_name, raw_data_t *p_data);
     static bus_error_t network_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
@@ -68,6 +69,9 @@ public:
     static bus_error_t device_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
     bus_error_t device_tget(char *event_name, raw_data_t *p_data);
     static bus_error_t device_tget_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+
+    bus_error_t policy_get(char* event_name, raw_data_t* p_data);
+    static bus_error_t policy_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
 
     bus_error_t radio_get(char* event_name, raw_data_t* p_data);
     static bus_error_t radio_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
@@ -98,6 +102,17 @@ public:
     bus_error_t rcaps_get(char* event_name, raw_data_t* p_data);
     static bus_error_t rcaps_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
     static bus_error_t rcaps_tget_inner(dm_easy_mesh_t *dm, const char *root, bus_data_prop_t **property);
+    bus_error_t wf6ap_get(char* event_name, raw_data_t* p_data);
+    bus_error_t wf6ap_tget(char* event_name, raw_data_t* p_data);
+    static bus_error_t wf6ap_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t wf6ap_tget_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t wf6ap_tget_params(dm_easy_mesh_t *dm, const char *root, em_radio_info_t *ri, bus_data_prop_t **property, int idx);
+
+    bus_error_t wf7ap_get(char* event_name, raw_data_t* p_data);
+    bus_error_t wf7ap_tget(char* event_name, raw_data_t* p_data);
+    static bus_error_t wf7ap_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t wf7ap_tget_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t wf7ap_tget_params(dm_easy_mesh_t *dm, const char *root, em_radio_info_t *ri, bus_data_prop_t **property, int idx);
 
     dm_op_class_t* get_dm_curop(dm_easy_mesh_t *dm, dm_radio_t *radio, int instance);
     bus_error_t curops_get(char* event_name, raw_data_t* p_data);
@@ -110,6 +125,22 @@ public:
     static bus_error_t sta_tget_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
     static bus_error_t sta_tget_params(dm_easy_mesh_t *dm, const char *root, em_bss_info_t *bi, bus_data_prop_t **property);
     static bus_error_t sta_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+
+    dm_ap_mld_t *get_dm_ap_mld(dm_easy_mesh_t *dm, char *instance, bool is_num);
+    bus_error_t apmld_get(char *event_name, raw_data_t *p_data);
+    bus_error_t apmld_tget(char *event_name, raw_data_t *p_data);
+    bus_error_t apmldcfg_get(char *event_name, raw_data_t *p_data);
+    static bus_error_t apmld_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t apmld_tget_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t apmld_tget_params(dm_easy_mesh_t *dm, const char *root, bus_data_prop_t **property);
+    static bus_error_t apmldcfg_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+
+    bus_error_t affap_get(char *event_name, raw_data_t *p_data);
+    bus_error_t affap_tget(char *event_name, raw_data_t *p_data);
+    static bus_error_t affap_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t affap_tget_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t affap_tget_params(dm_easy_mesh_t *dm, const char *root, em_ap_mld_info_t *ami, bus_data_prop_t **property);
+
 private:
     db_client_t m_db_client;
     bool	m_initialized;
