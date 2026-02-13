@@ -910,22 +910,16 @@ int em_capability_t::handle_bsta_cap_report(unsigned char *buff, unsigned int le
     tmp_len = len - static_cast<unsigned int> (sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t));
     while ((tlv->type != em_tlv_type_eom) && (tmp_len > 0)) {
         if (tlv->type == em_tlv_type_client_info) {
-            if( dm->get_colocated() == true ) {
-                //Trigger event to request backhaul cap report, as this would handle the initial onboarding scenario, use the al em for this
-                //check if its the same device
-                if ( (memcmp(dev->id.dev_mac, dm->get_ctrl_al_interface_mac(), sizeof(mac_address_t)) != 0) ) {
-                    em_printfout("Cap: Update backhaul mac for Device id: %s",
-                        util::mac_to_string(dev->id.dev_mac).c_str());
-
-                    memcpy(dm->m_device.m_device_info.backhaul_mac.mac, tlv->value, sizeof(mac_address_t));
-                    dm->set_db_cfg_param(db_cfg_type_device_list_update, "");
-                }
-            } else {
+            if(dm->get_colocated() != true ) {
                 em_printfout("Cap: Update backhaul mac for Device id(non-coloc): %s",
                     util::mac_to_string(dev->id.dev_mac).c_str());
 
                 memcpy(dm->m_device.m_device_info.backhaul_mac.mac, tlv->value, sizeof(mac_address_t));
                 dm->set_db_cfg_param(db_cfg_type_device_list_update, "");
+            } else {
+                em_printfout("Device is colocated, not updating backhaul mac for Device id: %s, backhaul mac in dm: %s",
+                    util::mac_to_string(dev->id.dev_mac).c_str(),
+                    util::mac_to_string(dm->m_device.m_device_info.backhaul_mac.mac).c_str());
             }
             break;
         }

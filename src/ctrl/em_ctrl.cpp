@@ -86,7 +86,7 @@ void em_ctrl_t::handle_dm_commit(em_bus_event_t *evt)
             pnet = new_dm.get_network();
             *pnet = *net;
 
-            ref_dm = get_data_model(net->m_net_info.id, net->m_net_info.colocated_agent_id.mac);
+            ref_dm = get_data_model(net->m_net_info.id, net->m_net_info.ctrl_id.mac);
             assert(ref_dm != NULL);
             new_dm.set_num_network_ssid(ref_dm->get_num_network_ssid());
             for (unsigned int i = 0; i < ref_dm->get_num_network_ssid(); i++) {
@@ -1133,7 +1133,7 @@ void em_ctrl_t::start_complete()
         return;
     }
 
-    intf = m_data_model.get_ctrl_al_interface(const_cast<char*>(GLOBAL_NET_ID));
+    intf = m_data_model.get_controller_interface();
     assert(intf != NULL);
 
     dm_easy_mesh_t::macbytes_to_string(intf->mac, al_mac_str);
@@ -1141,10 +1141,11 @@ void em_ctrl_t::start_complete()
     raw.raw_data.bytes   = al_mac_str;
     raw.raw_data_len = static_cast<unsigned int> (strlen(al_mac_str));
 
-    if (desc->bus_set_fn(m_data_model.get_bus_hdl(), "Device.WiFi.Ctrl.CollocateAgentID", &raw)== 0) {
-        printf("%s:%d Collocated Agent ID: %s publish successfull\n",__func__, __LINE__, al_mac_str);
-    } else {
-        printf("%s:%d Collocated agent ID: %s publish  fail\n",__func__, __LINE__, al_mac_str);
+    if (desc->bus_set_fn(m_data_model.get_bus_hdl(), "Device.WiFi.DataElements.Network.ControllerID", &raw) == 0) {
+        printf("%s:%d Controller ID: %s publish successfull.\n", __func__, __LINE__, al_mac_str);
+    }
+    else {
+        printf("%s:%d Controller ID: %s publish  fail.\n", __func__, __LINE__, al_mac_str);
     }
 
     if (desc->bus_event_subs_fn(m_data_model.get_bus_hdl(), DEVICE_WIFI_DATAELEMENTS_NETWORK_NODE_CFG_POLICY, reinterpret_cast<void *> (&tr_181_t::subs_policy_config), NULL, 0) != 0) {
@@ -1185,7 +1186,6 @@ AlServiceAccessPoint* em_ctrl_t::al_sap_register(const std::string& data_socket_
         uint8_t* al_mac_bytes = g_al_mac_sap.data();
         em_printfout("AL SAP registration successful, AL MAC: %s", util::mac_to_string(al_mac_bytes).c_str());
 
-        m_data_model.set_colocated_agent_interface_mac(al_mac_bytes);
         m_data_model.set_dev_interface_mac(al_mac_bytes);
     } else {
         std::cout << "Registration failed with error: " << static_cast<int>(result) << std::endl;
