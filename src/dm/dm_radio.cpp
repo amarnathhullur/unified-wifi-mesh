@@ -189,7 +189,7 @@ bool dm_radio_t::operator == (const dm_radio_t& obj) {
     ret += (memcmp(&this->m_radio_info.intf.name, &obj.m_radio_info.intf.name, sizeof(em_interface_name_t)) != 0);
     ret += !(this->m_radio_info.enabled == obj.m_radio_info.enabled);
 	ret += !(this->m_radio_info.band == obj.m_radio_info.band);
-    ret += !(this->m_radio_info.media_data.media_type == obj.m_radio_info.media_data.media_type);
+    ret += !(this->m_radio_info.media_type == obj.m_radio_info.media_type);
     ret += !(this->m_radio_info.media_data.band == obj.m_radio_info.media_data.band);
     ret += !(this->m_radio_info.number_of_unassoc_sta == obj.m_radio_info.number_of_unassoc_sta);
     ret += !(this->m_radio_info.noise == obj.m_radio_info.noise);
@@ -226,7 +226,7 @@ void dm_radio_t::operator = (const dm_radio_t& obj)
     
 	this->m_radio_info.enabled = obj.m_radio_info.enabled;
 	this->m_radio_info.band = obj.m_radio_info.band;
-    this->m_radio_info.media_data.media_type = obj.m_radio_info.media_data.media_type;
+    this->m_radio_info.media_type = obj.m_radio_info.media_type;
     this->m_radio_info.media_data.band = obj.m_radio_info.media_data.band;
     this->m_radio_info.number_of_unassoc_sta = obj.m_radio_info.number_of_unassoc_sta;
     this->m_radio_info.noise = obj.m_radio_info.noise;

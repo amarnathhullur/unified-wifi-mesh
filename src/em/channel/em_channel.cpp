@@ -1461,7 +1461,7 @@ int em_channel_t::handle_channel_pref_tlv_ctrl(unsigned char *buff, unsigned int
             }
             else if (first_invalid_idx == -1 && pop_class_info->pref_valid == EM_CH_PREF_ENTRY_INVALID && pop_class_info->id.type == em_op_class_type_preference) {
                 // Store the index of first invalid preference entry in the datamodel
-                first_invalid_idx = j;
+                first_invalid_idx = static_cast<int>(j);
             }
         }
         if (!match_found && first_invalid_idx != -1)

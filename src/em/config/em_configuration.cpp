@@ -51,7 +51,8 @@
 #include "em_cmd_exec.h"
 #include "cjson_util.h"
 #include "ec_ctrl_configurator.h"
-
+#include <ifaddrs.h>
+#include <fstream>
 #include "wifi_util.h"
 
 // Initialize the static member variables
@@ -550,6 +551,69 @@ int em_configuration_t::create_bss_config_rprt_tlv(unsigned char *buff)
     return sizeof(em_tlv_t) + tlv_len;
 }
 
+unsigned short em_configuration_t::add_non_wifi_intf_to_device_info_type_tlv(em_local_interface_t *local_intf, unsigned short *num_non_wifi_intf)
+{
+    unsigned short tlv_len = 0;
+    struct ifaddrs *ifaddr = NULL, *ifa;
+    struct sockaddr *addr;
+    struct sockaddr_ll *ll_addr;
+    char* ifname;
+
+    if (getifaddrs(&ifaddr) != 0) {
+        em_printfout("Failed to get interface information");
+        return 0;
+    }
+
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        addr = ifa->ifa_addr;
+        ll_addr = reinterpret_cast<struct sockaddr_ll *>(ifa->ifa_addr);
+        ifname = ifa->ifa_name;
+        if (addr == NULL)
+            continue;
+
+        // We only care about the AF_PACKET family to avoid duplicates
+        // (getifaddrs returns an entry for every IP assigned to the interface)
+        if (addr->sa_family == AF_PACKET) {
+            struct stat st;
+
+            if (strncmp(ifname, "lo", 2) == 0) {
+                // Skip loopback interface
+                continue;
+            }
+            std::string pathStr = "/sys/class/net/" + std::string(ifname) + "/wireless";
+            if (stat(pathStr.c_str(), &st) == 0) {
+                // Skip wireless interfaces
+                continue;
+            }
+            //All others interfaces are treated as ethernet
+            memcpy(local_intf->mac_addr, ll_addr->sll_addr, sizeof(mac_address_t));
+            std::string speedPath = "/sys/class/net/" + std::string(ifname) + "/speed";
+            std::ifstream speedFile(speedPath);
+            int speed = 0;
+            if (speedFile.is_open()) {
+                speedFile >> speed;
+                speedFile.close();
+            } else {
+                em_printfout("Failed to read speed for interface %s, defaulting to 100Mbps", ifname);
+                speed = 100; // Default to 100Mbps if we can't read the speed
+            }
+            if (speed >= 1000) {
+                local_intf->media_data.media_type = EM_MEDIA_ETH_gig;
+            } else {
+                local_intf->media_data.media_type = EM_MEDIA_ETH_fast;
+            }
+            local_intf->media_data.media_spec_size = 0;
+            (*num_non_wifi_intf)++;
+            tlv_len += sizeof(em_local_interface_t);
+            local_intf = reinterpret_cast<em_local_interface_t *>(reinterpret_cast<unsigned char *> (local_intf) + sizeof(em_local_interface_t) + local_intf->media_data.media_spec_size);
+            em_printfout("Add Interface name:%s mac_addr:%s speed:%d",
+                ifname, util::mac_to_string(ll_addr->sll_addr).c_str(), speed);
+        }
+    }
+    freeifaddrs(ifaddr);
+    return tlv_len;
+}
+
 int em_configuration_t::create_device_info_type_tlv(unsigned char *buff)
 {
     em_tlv_t *tlv;
@@ -558,7 +622,7 @@ int em_configuration_t::create_device_info_type_tlv(unsigned char *buff)
     em_local_interface_t *local_intf;
     dm_easy_mesh_t  *dm;
     unsigned int i, j, no_of_bss = 0;
-    unsigned short tlv_len = 0;
+    unsigned short tlv_len = 0, num_non_wifi_intf = 0, non_wifi_intf_len = 0;
 
     dm = get_data_model();
 
@@ -567,7 +631,6 @@ int em_configuration_t::create_device_info_type_tlv(unsigned char *buff)
     dev_info = reinterpret_cast<em_device_info_type_t *> (tlv->value);
 
     memcpy(dev_info->al_mac_addr, dm->get_agent_al_interface_mac(), sizeof(mac_address_t));
-    dev_info->local_interface_num = static_cast<unsigned char> (dm->get_num_bss());
     local_intf = dev_info->local_interface;
     tlv_len = sizeof(em_device_info_type_t);
 	for (i = 0; i < dm->get_num_radios(); i++) {
@@ -584,12 +647,18 @@ int em_configuration_t::create_device_info_type_tlv(unsigned char *buff)
 			// fill test data
 			fill_media_data(&local_intf->media_data, &dm->m_bss[j]);
 
-			local_intf = reinterpret_cast<em_local_interface_t *>(reinterpret_cast<unsigned char *> (local_intf) + sizeof(em_local_interface_t));
+			local_intf = reinterpret_cast<em_local_interface_t *>(reinterpret_cast<unsigned char *> (local_intf) + sizeof(em_local_interface_t) + local_intf->media_data.media_spec_size);
 			tlv_len = tlv_len + sizeof(em_local_interface_t);
 		}
 	}
-
 	dev_info->local_interface_num = static_cast<unsigned char> (no_of_bss);
+
+    //we should now take care of adding non wifi related interfaces like ethernet, moCA etc in the local interface list and update the local_interface_num accordingly before sending the message.
+    //add the non wifi interfaces at the end of wifi interfaces in the local interface list and update the tlv_len accordingly.
+    non_wifi_intf_len = add_non_wifi_intf_to_device_info_type_tlv(local_intf, &num_non_wifi_intf);
+    tlv_len += non_wifi_intf_len;
+    dev_info->local_interface_num += num_non_wifi_intf;
+
     tlv->len = htons(tlv_len);
 
     return tlv_len;
@@ -5554,32 +5623,32 @@ void em_configuration_t::fill_media_data(em_media_spec_data_t *spec, dm_bss_t *b
        2. Band: 1 - 20Mhz, 2 - 40Mhz, 3 - 80Mhz, 4 - 160Mhz
     */
     if (bss_info->vap_mode == em_vap_mode_ap) {
-        memcpy(spec->network_memb, bss_info->bssid.mac, sizeof(mac_address_t));
-        spec->role = EM_MEDIA_WIFI_ROLE_AP;
+        memcpy(spec->media_spec_data[0].network_memb, bss_info->bssid.mac, sizeof(mac_address_t));
+        spec->media_spec_data[0].role = EM_MEDIA_WIFI_ROLE_AP;
     } else {
-        memcpy(spec->network_memb, bss_info->sta_mac, sizeof(mac_address_t));
-        spec->role = EM_MEDIA_WIFI_ROLE_STA;
+        memcpy(spec->media_spec_data[0].network_memb, bss_info->sta_mac, sizeof(mac_address_t));
+        spec->media_spec_data[0].role = EM_MEDIA_WIFI_ROLE_STA;
     }
     radio = dm->get_radio(bss_info->ruid.mac);
     switch (radio->get_radio_info()->band) {
         case em_freq_band_24:
-            spec->band = 0x01;
+            spec->media_spec_data[0].band = 0x01;
             break;
 
         case em_freq_band_5:
-            spec->band = 0x03;
+            spec->media_spec_data[0].band = 0x03;
             break;
 
         case em_freq_band_60:
-            spec->band = 0x04;
+            spec->media_spec_data[0].band = 0x04;
             break;
 
         default:
-            spec->band = 0x01;
+            spec->media_spec_data[0].band = 0x01;
             break;
     }
-    spec->center_freq_index_1 = 0;
-    spec->center_freq_index_2 = 0;
+    spec->media_spec_data[0].center_freq_index_1 = 0;
+    spec->media_spec_data[0].center_freq_index_2 = 0;
 }
 
 void em_configuration_t::process_agent_state()
@@ -5635,8 +5704,9 @@ void em_configuration_t::process_ctrl_state()
             {
                 for (auto &em : em_radios) {
                     if (em->get_state() != em_state_ctrl_topo_sync_pending) {
-                        em_printfout("radio %s is in state:%d, not in topo sync pending state, ignoring",
-                            util::mac_to_string(em->get_radio_interface_mac()).c_str(), em->get_state());
+                        em_printfout("radio %s is in state:%s, not in topo sync pending state, ignoring",
+                            util::mac_to_string(em->get_radio_interface_mac()).c_str(),
+                            em_t::state_2_str(em->get_state()));
                         em_radios.clear();
                         return;
                     }

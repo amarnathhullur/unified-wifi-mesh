@@ -209,6 +209,8 @@ class em_configuration_t {
 	 */
 	int	create_bss_config_rprt_tlv(unsigned char *buff);
     
+	unsigned short add_non_wifi_intf_to_device_info_type_tlv(em_local_interface_t* local_intf, unsigned short *num_non_wifi_intf);
+
 	/**!
 	 * @brief Creates a device information type TLV (Type-Length-Value) structure.
 	 *

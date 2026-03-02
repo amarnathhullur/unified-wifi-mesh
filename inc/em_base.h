@@ -1280,13 +1280,17 @@ typedef struct {
 } __attribute__((__packed__)) em_cac_status_rprt_active_t;
 
 typedef struct {
-    unsigned short  media_type;
-    unsigned char  media_spec_size; // size of the ensuing data
     mac_address_t network_memb;
     unsigned char  role;
     unsigned char  band;
     unsigned char  center_freq_index_1;
     unsigned char  center_freq_index_2;
+} __attribute__((__packed__)) em_wifi_media_spec_data_t;
+
+typedef struct {
+    unsigned short  media_type;
+    unsigned char  media_spec_size; // size of the ensuing data
+    em_wifi_media_spec_data_t media_spec_data[0];
 } __attribute__((__packed__)) em_media_spec_data_t;
 
 typedef struct {
@@ -2544,7 +2548,8 @@ typedef struct {
 	em_interface_t intf;
     bool    enabled;
     em_freq_band_t band;
-    em_media_spec_data_t	media_data;
+    unsigned short  media_type;
+    em_wifi_media_spec_data_t media_data;
     unsigned  int   number_of_bss;
     unsigned  int   number_of_unassoc_sta;
     int     noise;

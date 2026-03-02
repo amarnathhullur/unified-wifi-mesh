@@ -372,7 +372,7 @@ void dm_easy_mesh_list_t::put_radio(const char *key, const dm_radio_t *radio)
     }
     *pradio = *radio;
     em_printfout("Radio dev_id is:%s", util::mac_to_string(pradio->m_radio_info.id.dev_mac).c_str());
-    if ((em = m_mgr->create_node(&pradio->m_radio_info.intf, static_cast<em_freq_band_t> (pradio->m_radio_info.media_data.band), dm, false,
+    if ((em = m_mgr->create_node(&pradio->m_radio_info.intf, static_cast<em_freq_band_t> (pradio->m_radio_info.band), dm, false,
             em_profile_type_3, em_service_type_ctrl)) != NULL) {
         em_printfout("Node created successfully for radio:%s almac:%s", key, util::mac_to_string(pradio->m_radio_info.id.dev_mac).c_str());
     }
