@@ -175,6 +175,15 @@ short em_channel_t::create_channel_scan_req_tlv(unsigned char *buff)
 
 		req_op_class->op_class = static_cast<unsigned char> (opclass->m_op_class_info.op_class);
 		req_op_class->num_channels = static_cast<unsigned char> (opclass->m_op_class_info.num_channels);
+		em_freq_band_t band = dm_easy_mesh_t::get_freq_band_by_op_class(static_cast<int>(opclass->m_op_class_info.op_class));
+		em_freq_band_t cur_band = get_band();
+
+		if (cur_band == band) {
+		    req_op_class->op_class = static_cast<unsigned char> (opclass->m_op_class_info.op_class);
+		    req_op_class->num_channels = static_cast<unsigned char> (opclass->m_op_class_info.num_channels);
+		} else {
+		    continue;
+		}
 
 		for (j = 0; j < req_op_class->num_channels; j++) {
 			req_op_class->channel_list[j] = static_cast<unsigned char> (opclass->m_op_class_info.channels[j]);
@@ -184,6 +193,8 @@ short em_channel_t::create_channel_scan_req_tlv(unsigned char *buff)
 		
 		req->num_op_classes++;
 		req_op_class = reinterpret_cast<em_channel_scan_req_op_class_t *> (reinterpret_cast<unsigned char *> (req_op_class) + sizeof(em_channel_scan_req_op_class_t) + req_op_class->num_channels*sizeof(unsigned char));
+		//Do not loop if we get the current radio
+		break;
 	}
 
 	return len;
@@ -313,12 +324,12 @@ int em_channel_t::send_channel_scan_request_msg()
     tmp += (sizeof (em_tlv_t));
     len += (sizeof (em_tlv_t));
     if (em_msg_t(em_msg_type_channel_scan_req, em_profile_type_3, buff, len).validate(errors) == 0) {
-        printf("Channel Selection Request msg failed validation in tnx end\n");
+        em_printfout("Channel Scan Request msg failed validation in tnx end");
         //return -1;
     }
 
     if (send_frame(buff, len)  < 0) {
-        printf("%s:%d: Channel Selection Request msg failed, error:%d\n", __func__, __LINE__, errno);
+        em_printfout("Channel Scan Request msg failed, error:%d", errno);
         return -1;
     }
 
@@ -471,7 +482,7 @@ short em_channel_t::create_channel_scan_res_tlv(unsigned char *buff, unsigned in
 	}			
 
 	memcpy(tmp, &scan_res->m_scan_result.aggr_scan_duration, sizeof(unsigned int));
-	len += static_cast<short unsigned int> (sizeof(unsigned char));
+	len += static_cast<short unsigned int> (sizeof(unsigned int));
 	tmp += sizeof(unsigned int);
 	
 	memcpy(tmp, &scan_res->m_scan_result.scan_type, sizeof(unsigned char));
@@ -484,7 +495,7 @@ short em_channel_t::create_channel_scan_res_tlv(unsigned char *buff, unsigned in
 
 int em_channel_t::send_channel_scan_report_msg(unsigned int *last_index)
 {
-    unsigned char buff[MAX_EM_BUFF_SZ];
+    unsigned char buff[MAX_EM_BUFF_SZ + MAX_EM_BUFF_SZ];
     unsigned short  msg_type = em_msg_type_channel_scan_rprt;
     unsigned int len = 0;
     em_cmdu_t *cmdu;
@@ -492,10 +503,11 @@ int em_channel_t::send_channel_scan_report_msg(unsigned int *last_index)
     short sz = 0;
     unsigned char *tmp = buff;
     unsigned short type = htons(ETH_P_1905);
-	char date_time[EM_DATE_TIME_BUFF_SZ];
+    char date_time[EM_DATE_TIME_BUFF_SZ];
     dm_easy_mesh_t *dm;
-	unsigned int i, start_idx = *last_index;
-	unsigned char time_len;
+    unsigned int i, start_idx = *last_index;
+    unsigned char time_len;
+    dm_scan_result_t *scan_res;
 
     dm = get_data_model();
 
@@ -526,7 +538,7 @@ int em_channel_t::send_channel_scan_report_msg(unsigned int *last_index)
     tlv = reinterpret_cast<em_tlv_t *> (tmp);
     tlv->type = em_tlv_type_timestamp;
 	util::get_date_time_rfc3399(date_time, sizeof(date_time));
-	sz = static_cast<short int> (strlen(date_time) + 1);
+	sz = static_cast<short> (strlen(date_time) + 1);
 	time_len = static_cast<unsigned char> (strlen(date_time));
 	memcpy(tlv->value, &time_len, sizeof(unsigned char));
 	memcpy(tlv->value + 1, date_time, static_cast<size_t> (sz));
@@ -536,21 +548,20 @@ int em_channel_t::send_channel_scan_report_msg(unsigned int *last_index)
     len += static_cast<unsigned int> (sizeof(em_tlv_t) + static_cast<short unsigned int> (sz));
 
     // One or more Channel Scan Result TLVs (see section 17.2.40).
-	for (i = start_idx; i < dm->get_num_scan_results(); i++) {
-    	tlv = reinterpret_cast<em_tlv_t *> (tmp);
-    	tlv->type = em_tlv_type_channel_scan_rslt;
-    	sz = create_channel_scan_res_tlv(tlv->value, i);
-    	tlv->len = htons(static_cast<short unsigned int> (sz));
+    for (i = start_idx; i < dm->get_num_scan_results(); i++) {
+        scan_res = dm->get_scan_result(i);
+        if(memcmp(get_radio_interface_mac(), scan_res->m_scan_result.id.scanner_mac, sizeof(mac_address_t)) == 0) { 
+            tlv = reinterpret_cast<em_tlv_t *> (tmp);
+            tlv->type = em_tlv_type_channel_scan_rslt;
+            sz = create_channel_scan_res_tlv(tlv->value, i);
+            tlv->len = htons(static_cast<short unsigned int> (sz));
 
-    	tmp += (sizeof(em_tlv_t) + static_cast<short unsigned int> (sz));
-    	len += static_cast<unsigned int> (sizeof(em_tlv_t) + static_cast<short unsigned int> (sz));
-
-		if (len > EM_MAX_CHANNEL_SCAN_RPRT_MSG_LEN) {
-			break;	
-		}
+            tmp += (sizeof(em_tlv_t) + static_cast<short unsigned int> (sz));
+            len += static_cast<unsigned int> (sizeof(em_tlv_t) + static_cast<short unsigned int> (sz));
 	}
-	
-	*last_index = i + 1;
+    }
+
+    *last_index = i + 1;
 
     // Zero or more MLD Structure TLV (see section 17.2.99)
 
@@ -567,7 +578,7 @@ int em_channel_t::send_channel_scan_report_msg(unsigned int *last_index)
     //}
 
     if (send_frame(buff, len)  < 0) {
-        printf("%s:%d: Channel Selection Request msg failed, error:%d\n", __func__, __LINE__, errno);
+        em_printfout("Channel Scan Report  msg failed, error:%d\n", errno);
         return -1;
     }
 
