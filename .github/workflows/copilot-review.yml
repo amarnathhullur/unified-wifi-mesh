@@ -1,0 +1,32 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    # Restrict to specific paths relevant to unified-wifi-mesh
+    paths:
+      - 'src/**'
+      - 'inc/**'
+      - '**.cpp'
+      - '**.h'
+
+jobs:
+  copilot_review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: GitHub Copilot Reviewer
+        # Note: This uses the official GitHub-supported mechanism for PR summaries
+        # and requires the Copilot for PRs extension enabled in your Org.
+        uses: github/copilot-pr-reviewer-action@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          debug: false
+          review_type: 'detailed'
