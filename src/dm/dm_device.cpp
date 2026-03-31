@@ -33,7 +33,7 @@
 #include "dm_device.h"
 #include "dm_easy_mesh.h"
 #include "dm_easy_mesh_ctrl.h"
-//#include "util.h"
+#include "util.h"
 
 int dm_device_t::decode(const cJSON *obj, void *parent_id)
 {
@@ -144,7 +144,7 @@ int dm_device_t::decode(const cJSON *obj, void *parent_id)
     if ((tmp = cJSON_GetObjectItem(obj, "BackhaulALID")) != NULL) {
         snprintf(mac_str, sizeof(mac_str), "%s", cJSON_GetStringValue(tmp));
         dm_easy_mesh_t::string_to_macbytes(mac_str, m_device_info.backhaul_alid.mac);
-	dm_easy_mesh_t::name_from_mac_address(&m_device_info.backhaul_alid.mac, m_device_info.backhaul_alid.name);
+        dm_easy_mesh_t::name_from_mac_address(&m_device_info.backhaul_alid.mac, m_device_info.backhaul_alid.name);
     }
     if ((tmp = cJSON_GetObjectItem(obj, "TrafficSeparationCapability")) != NULL) {
         m_device_info.traffic_sep_cap = cJSON_IsTrue(tmp);
@@ -160,7 +160,7 @@ int dm_device_t::decode(const cJSON *obj, void *parent_id)
     }
 	
     if ((tmp = cJSON_GetObjectItem(obj, "TIDLinkMapping")) != NULL) {
-        snprintf(m_device_info.tidlink_map, sizeof(m_device_info.tidlink_map), "%s", cJSON_GetStringValue(tmp));
+        m_device_info.tidlink_map = static_cast<unsigned char> (tmp->valuedouble);
     }
 	
     if ((tmp = cJSON_GetObjectItem(obj, "AssociatedSTAReportingInterval")) != NULL) {
@@ -243,7 +243,7 @@ void dm_device_t::encode(cJSON *obj, bool summary)
     cJSON_AddBoolToObject(obj, "EasyConnectCapability", m_device_info.easy_conn_cap);
     cJSON_AddNumberToObject(obj, "TestCapabilities", m_device_info.test_cap);
     cJSON_AddNumberToObject(obj, "APMLDMaxLinks", m_device_info.apmld_maxlinks);
-    cJSON_AddStringToObject(obj, "TIDLinkMapping", m_device_info.tidlink_map);
+    cJSON_AddNumberToObject(obj, "TIDLinkMapping", m_device_info.tidlink_map);
     cJSON_AddNumberToObject(obj, "AssociatedSTAReportingInterval", m_device_info.assoc_sta_reporting_int);
     cJSON_AddNumberToObject(obj, "MaxNumMLDs", m_device_info.max_nummlds);
     cJSON_AddNumberToObject(obj, "bSTAMLDMaxLinks", m_device_info.bstamld_maxlinks);
@@ -402,6 +402,11 @@ int dm_device_t::update_easymesh_json_cfg(bool colocated_mode)
 
 dm_device_t::dm_device_t(em_device_info_t *dev)
 {
+    memset(&m_device_info, 0, sizeof(em_device_info_t));
+    if ( dev == nullptr ) {
+        em_printfout("Error: device_info is null");
+        return;
+    }
     memcpy(&m_device_info, dev, sizeof(em_device_info_t));
 }
 
@@ -412,7 +417,7 @@ dm_device_t::dm_device_t(const dm_device_t& dev)
 
 dm_device_t::dm_device_t()
 {
-
+    memset(&m_device_info, 0, sizeof(em_device_info_t));
 }
 
 dm_device_t::~dm_device_t()

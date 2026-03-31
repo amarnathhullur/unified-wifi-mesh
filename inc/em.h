@@ -71,6 +71,7 @@ class em_t :
     bool dev_test_enable;
 
 	bool m_is_dpp_onboarding = false;
+	bool m_ssid_mismatch = false;
 
 	std::map<std::string, peer_1905_security_status> m_1905_layer_peer_security_statuses;
 
@@ -719,6 +720,24 @@ public:
 
 	void set_is_dpp_onboarding(bool is_onboarding) override { m_is_dpp_onboarding = is_onboarding; }
 
+	/**!
+	 *  @brief Retrieves the ssid mismatch bool value.
+	 *
+	 *  This function returns True or False based of ssid mismatch.
+	 *
+	 *  @returns This function returns True or False as bool.
+	 */
+	bool get_ssid_mismatch() { return m_ssid_mismatch; }
+
+	/**!
+	 *  @brief Sets the ssid mismatch bool value.
+     *
+     *  This function sets True or False based of ssid mismatch.
+     *
+     * @returns This function Sets True or False as bool.
+     */
+	void set_ssid_mismatch(bool mismatch) { m_ssid_mismatch = mismatch; }
+
     
 	/**!
 	 * @brief Checks if there is at least one associated STA.
@@ -798,6 +817,7 @@ public:
 	 * calling this function.
 	 */
 	short create_ap_cap_tlv(unsigned char *buff);
+	int create_akm_suite_cap_tlv(uint8_t *buff);
 
 	/**
 	 * @brief Create an AP Radio Advanced Capabilities TLV (EM 17.2.52)
@@ -1053,7 +1073,9 @@ public:
 
 	// END: DPP Callbacks for BSS information
 
-    
+	int handle_wifi6_cap_tlv(unsigned char *buff);
+	int handle_wifi7_agent_cap_tlv(unsigned char *buff);
+
 	/**!
 	 * @brief Retrieves the manufacturer information.
 	 *

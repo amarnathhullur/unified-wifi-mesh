@@ -464,7 +464,7 @@ int em_configuration_t::create_operational_bss_tlv_topology(unsigned char *buff)
 	ap = reinterpret_cast<em_ap_op_bss_t *> (tlv->value);
 	ap->radios_num = dm->get_num_radios();
 	radio = ap->radios;
-	for (radio_index = 0; radio_index < dm->get_num_radios(); radio_index++) {
+    for (radio_index = 0; radio_index < dm->get_num_radios(); radio_index++) {
         memcpy(radio->ruid, dm->get_radio_by_ref(radio_index).get_radio_interface_mac(), sizeof(mac_address_t));
         radio->bss_num = 0;
         bss = radio->bss;
@@ -663,7 +663,6 @@ int em_configuration_t::create_bsta_mld_config_tlv(unsigned char *buff)
     em_affiliated_bsta_mld_t *affiliated_bsta_mld;
     dm_easy_mesh_t  *dm;
     unsigned int i;
-    unsigned short bsta_mld_len = 0;
     unsigned short affiliated_bsta_len = 0;
     unsigned short tlv_len = 0;
 
@@ -924,7 +923,7 @@ int em_configuration_t::create_tid_to_link_map_policy_tlv(unsigned char *buff)
 
 int em_configuration_t::send_topology_response_msg(unsigned char *dst, unsigned short msg_id)
 {
-    unsigned char buff[MAX_EM_BUFF_SZ];
+    unsigned char buff[MAX_EM_BUFF_SZ + MAX_EM_BUFF_SZ];
     char *errors[EM_MAX_TLV_MEMBERS] = {0};
     unsigned short  msg_type = em_msg_type_topo_resp;
     unsigned int len = 0;
@@ -1411,8 +1410,8 @@ int em_configuration_t::handle_bsta_radio_cap(unsigned char *buff, unsigned int 
         }
     }
 
-    em_printfout("is_colocated val: %d for device id: %s, ctrl al_interface mac: %s \
-        , ctrl interface mac: %s", is_colocated, util::mac_to_string(dev->id.dev_mac).c_str(),
+    em_printfout("is_colocated val: %d for device id: %s, ctrl al_interface mac: %s, ctrl interface mac: %s",
+        is_colocated, util::mac_to_string(dev->id.dev_mac).c_str(),
         util::mac_to_string(dm->get_ctrl_al_interface_mac()).c_str(),
         util::mac_to_string(dm->get_controller_interface_mac()).c_str());
 
@@ -1420,14 +1419,15 @@ int em_configuration_t::handle_bsta_radio_cap(unsigned char *buff, unsigned int 
     dm_easy_mesh_t::macbytes_to_string(bsta_radio_cap->ruid, rad_mac_str);
 
     get_mgr()->io_process(em_bus_event_type_bsta_cap_req, reinterpret_cast<unsigned char *> (&rad_mac_str), sizeof(mac_addr_str_t));
-    em_printfout("IO process for bcap query submitted with rad mac: %s", rad_mac_str);
+    em_printfout("IO process for bcap query submitted with radio mac: %s", rad_mac_str);
 
     em_printfout("Update BSTA Cap for Device id: %s",
         util::mac_to_string(dev->id.dev_mac).c_str());
 
-    memcpy(dm->m_device.m_device_info.backhaul_sta, bsta_radio_cap->bsta_addr, sizeof(mac_address_t));
-    dm->set_db_cfg_param(db_cfg_type_device_list_update, "");
-
+    if (is_colocated != true) {
+        memcpy(dm->m_device.m_device_info.backhaul_sta, bsta_radio_cap->bsta_addr, sizeof(mac_address_t));
+        dm->set_db_cfg_param(db_cfg_type_device_list_update, "");
+    }
     return 0;
 }
 
@@ -1470,9 +1470,23 @@ int em_configuration_t::handle_ap_operational_bss(unsigned char *buff, unsigned 
                 memcpy(dm_bss->m_bss_info.ruid.mac, radio->ruid, sizeof(mac_address_t));
                 dm->set_num_bss(dm->get_num_bss() + 1);
 			}
-            strncpy(dm_bss->m_bss_info.ssid, bss->ssid, bss->ssid_len);
-			dm_bss->m_bss_info.enabled = true;
-			strncpy(dm_bss->m_bss_info.timestamp, time_date, sizeof(em_long_string_t));
+            ssid_t ssid_buf;
+            size_t ssid_len = bss->ssid_len;
+            if (ssid_len >= sizeof(ssid_buf)) {
+                ssid_len = sizeof(ssid_buf) - 1;
+            }
+            memcpy(ssid_buf, bss->ssid, ssid_len);
+            ssid_buf[ssid_len] = '\0';
+            if (dm->is_ssid_match(ssid_buf)) {
+                strncpy(dm_bss->m_bss_info.ssid, ssid_buf, sizeof(dm_bss->m_bss_info.ssid) - 1);
+                dm_bss->m_bss_info.ssid[sizeof(dm_bss->m_bss_info.ssid) - 1] = '\0';
+            } else {
+                // SSID mismatch, stop processing further.
+                em_printfout("%s:%d:SSID mismatch. Stop proceeding. SSID=%s", __func__, __LINE__, bss->ssid);
+                return -2;
+            }
+            dm_bss->m_bss_info.enabled = true;
+            strncpy(dm_bss->m_bss_info.timestamp, time_date, sizeof(em_long_string_t));
 
 			updated_at_least_one_bss = true;
 			
@@ -1566,7 +1580,6 @@ int em_configuration_t::handle_topology_notification(unsigned char *buff, unsign
 		tmp_len -= static_cast<unsigned int> (sizeof(em_tlv_t) + htons(tlv->len));
 		tlv = reinterpret_cast<em_tlv_t *> (reinterpret_cast<unsigned char *> (tlv) + sizeof(em_tlv_t) + htons(tlv->len));
     }
-    set_state(em_state_ctrl_configured);
 
 	return 0;
 }
@@ -1584,7 +1597,6 @@ int em_configuration_t::handle_topology_response(unsigned char *buff, unsigned i
 	dm_easy_mesh_t *dm;
     em_raw_hdr_t *hdr = reinterpret_cast<em_raw_hdr_t *>(buff);
     uint8_t *src_al_mac = hdr->src;
-    em_interface_name_t name;
     
 	dm = get_data_model();
 
@@ -1651,10 +1663,18 @@ int em_configuration_t::handle_topology_response(unsigned char *buff, unsigned i
         return -1;
     }
 
-	if (handle_ap_operational_bss(tlv->value, tlv->len) != 0) {
-		printf("%s:%d: Operational BSS handling failed\n", __func__, __LINE__);
-		return -1;
-	}
+
+        int rc = handle_ap_operational_bss(tlv->value, tlv->len);
+        if (rc != 0) {
+            if (rc == -2) {
+                em_printfout("%s:%d: Failed to handle operational BSS due to SSID misconfiguration.", __func__, __LINE__);
+                static_cast<em_t*>(this)->set_ssid_mismatch(true);
+            } else {
+                em_printfout("%s:%d: Operational BSS handling failed rc=%d\n", __func__, __LINE__, rc);
+            }
+            return rc;
+        }
+
 
     while ((tlv->type != em_tlv_type_eom) && (tmp_len > 0)) {
         if (tlv->type != em_tlv_type_bss_conf_rep) {
@@ -1713,12 +1733,36 @@ int em_configuration_t::handle_topology_response(unsigned char *buff, unsigned i
 
     em_printfout("Src al mac: " MACSTRFMT, MAC2STR(src_al_mac));
 
-    if (dm_easy_mesh_t::name_from_mac_address(reinterpret_cast<const mac_address_t*>(src_al_mac), name) == 0) {
-        em_printfout("MAC address exists on this device.");
+    if (dm->get_colocated() == true) {
         memset(dm->m_device.m_device_info.backhaul_alid.mac, 0, sizeof(mac_address_t));
     } else {
-        em_printfout("MAC address not found on any interface.");
-        memcpy(dm->m_device.m_device_info.backhaul_alid.mac, dm->get_ctrl_al_interface_mac(), sizeof(mac_address_t));
+        //backhaul_alid is the alid of the Agent on the network that is providing the backhaul for this EasyMesh Agent.
+        //This would be the colocated AL interface mac for extenders connected in star topology.
+        //For daisy chain topology, this would be the AL interface mac of the agent that is providing backhaul connectivity.
+        // Obtain the mesh_sta information of this dm.
+	    em_bss_info_t *bss = dm->get_bsta_bss_info();
+        dm_device_t *backhaul_dev = NULL;
+        if (bss != NULL) {
+            //TODO: Get backhaul_dev matching bss->id.bssid and al_mac not matching src_al_mac
+            //from the list of dm.
+            /*
+            backhaul_dev = em_mgr()->get_dm_dev(src_al_mac, bss->id.bssid);
+            dm_easy_mesh_ctrl_t *dm_ctrl = em_ctrl_t::get_em_ctrl_instance()->get_dm_ctrl();
+            if (dm_ctrl) {
+                backhaul_dev = dm_ctrl->get_dm_dev(src_al_mac, bss->id.bssid);
+            }*/
+        } else {
+            em_printfout("Backhaul STA not found in any bss for this device:%s",
+                util::mac_to_string(src_al_mac).c_str());
+        }
+        if (backhaul_dev != NULL) {
+            em_device_info_t *bhdi = backhaul_dev->get_device_info();
+            memcpy(dm->m_device.m_device_info.backhaul_alid.mac, bhdi->id.dev_mac, sizeof(mac_address_t));
+            em_printfout("Backhaul ALID mac address:%s updated from agent dm: %s",
+                    util::mac_to_string(bhdi->id.dev_mac).c_str(), util::mac_to_string(src_al_mac).c_str());
+        } else {
+            memset(dm->m_device.m_device_info.backhaul_alid.mac, 0, sizeof(mac_address_t));
+        }
     }
 
     em_printfout("updated dm dev_info's colocated: %d backhaul_mac: %s and backhaul_alid: %s", dm->get_colocated(),
@@ -1931,31 +1975,20 @@ unsigned short em_configuration_t::create_traffic_separation_policy(unsigned cha
     unsigned short len = 0;
     unsigned int i;
     dm_easy_mesh_t *dm = get_data_model();
-    dm_policy_t *policy;
+    dm_network_ssid_t *net_ssid;
     unsigned char *tmp = buff;
-    bool found_match = false;
 
-    for (i = 0; i < dm->get_num_policy(); i++) {
-        policy = &dm->m_policy[i];
-        if (policy->m_policy.id.type == em_policy_id_type_traffic_separation) {
-            found_match = true;
-            break;
-        }
-    }
-    if (found_match == false) {
-        em_printfout("Found Match False ");
-        return 0;
-    }
-
-    unsigned char ssids_num = static_cast<unsigned char>(policy->m_policy.traffic_separ.num_ssids);
-    *tmp = ssids_num;
+    // get total ssid count
+    unsigned char ssids_num = dm->get_num_network_ssid();
+    *tmp = static_cast<unsigned char>(ssids_num);
     tmp += sizeof(unsigned char);
     len += sizeof(unsigned char);
 
-    for (i = 0; i < policy->m_policy.traffic_separ.num_ssids; i++) {
-        auto &info = policy->m_policy.traffic_separ.ssid_info[i];
+    for (i = 0; i < ssids_num; i++) {
+        net_ssid = dm->get_network_ssid(i);
 
-        std::vector<unsigned char> ssid_bytes(info.ssid, info.ssid + strlen(info.ssid));
+        std::vector<unsigned char> ssid_bytes(net_ssid->m_network_ssid_info.ssid, 
+                    net_ssid->m_network_ssid_info.ssid + strlen(net_ssid->m_network_ssid_info.ssid));
         unsigned char ssid_len = static_cast<unsigned char>(ssid_bytes.size());
 
         *tmp = ssid_len;
@@ -1966,11 +1999,11 @@ unsigned short em_configuration_t::create_traffic_separation_policy(unsigned cha
         tmp += ssid_len;
         len += ssid_len;
 
-        unsigned short vlan_n = htons(info.vlan_id);
+        unsigned short vlan_n = htons(net_ssid->m_network_ssid_info.vlan_id);
         memcpy(tmp, &vlan_n, sizeof(vlan_n));
         tmp += sizeof(unsigned short);
         len += sizeof(unsigned short);
-	em_printfout(" TRAFFIC SEPARATION SSID='%.*s' Len=%u, VLAN=%u ",ssid_len,ssid_bytes.data(), ssid_len, info.vlan_id);
+	    em_printfout(" TRAFFIC SEPARATION SSID='%.*s' Len=%u, VLAN=%u ",ssid_len,ssid_bytes.data(), ssid_len, net_ssid->m_network_ssid_info.vlan_id);
     }
     em_printfout("Length: %d ", len);
     return len;
@@ -2979,76 +3012,6 @@ int em_configuration_t::create_bsta_radio_cap_tlv(uint8_t *buff)
     return len;
 }
 
-int em_configuration_t::create_akm_suite_cap_tlv(uint8_t *buff)
-{
-    ASSERT_NOT_NULL(buff, -1, "%s:%d: Buffer is null\n", __func__, __LINE__);
-    dm_easy_mesh_t *dm = get_data_model();
-    ASSERT_NOT_NULL(dm, -1, "%s:%d: Data model is null\n", __func__, __LINE__);
-
-    em_akm_suite_info_t *akm_suite_info = reinterpret_cast<em_akm_suite_info_t *>(buff);
-
-    std::set<std::string> fh_akms;
-    std::set<std::string> bh_akms;
-
-    for (unsigned int i = 0; i < dm->get_num_bss(); i++) {
-        em_bss_info_t *bss_info = dm->get_bss_info(i);
-        if (bss_info == NULL) continue;
-
-        for (int i = 0; i < bss_info->num_fronthaul_akms; i++) {
-            fh_akms.insert(bss_info->fronthaul_akm[i]);
-        }
-        for (int i = 0; i < bss_info->num_backhaul_akms; i++) {
-            bh_akms.insert(bss_info->backhaul_akm[i]);
-        }
-    }
-
-    std::vector<std::string> fh_akms_vec(fh_akms.begin(), fh_akms.end());
-    std::vector<std::string> bh_akms_vec(bh_akms.begin(), bh_akms.end());
-
-    size_t tlv_size = sizeof(uint8_t) + sizeof(uint8_t); // Size of the `Num_BackAKM` and `Num_FrontAKM` fields
-    tlv_size += (sizeof(em_fh_akm_suite_t) * fh_akms_vec.size()); // Size of fronthaul AKM suites
-    tlv_size += (sizeof(em_bh_akm_suite_t) * bh_akms_vec.size()); // Size of backhaul AKM suites
-
-    memset(buff, 0, tlv_size);
-
-    em_bh_akm_suite_info_t *bh_akm_suite_info = &akm_suite_info->bh_akm_suites;
-    em_fh_akm_suite_info_t *fh_akm_suite_info = &akm_suite_info->fh_akm_suites;
-    
-    bh_akm_suite_info->count = static_cast<uint8_t>(bh_akms_vec.size());
-    fh_akm_suite_info->count = static_cast<uint8_t>(fh_akms_vec.size());
-
-    em_bh_akm_suite_t *bh_akm_suite = bh_akm_suite_info->suites;
-    // Copy backhaul AKMs
-    for (size_t i = 0; i < bh_akms_vec.size(); i++) {
-        if (bh_akms_vec[i].empty()) continue;
-        std::vector<uint8_t> bh_akm_bytes = util::akm_to_bytes(bh_akms_vec[i]);
-        if (bh_akm_bytes.size() != 4) {
-            em_printfout("Warning: Could not map backhaul AKM string '%s' to AKM suite bytes, skipping", bh_akms_vec[i].c_str());
-            continue;
-        }
-        // OUI is first 3 bytes, suite type is last byte
-        memcpy(bh_akm_suite[i].oui, bh_akm_bytes.data(), 3);
-        bh_akm_suite[i].akm_suite_type = bh_akm_bytes[3];
-    }
-
-    em_fh_akm_suite_t *fh_akm_suite = fh_akm_suite_info->suites;
-
-    // Copy fronthaul AKMs
-    for (size_t i = 0; i < fh_akms_vec.size(); i++) {
-        if (fh_akms_vec[i].empty()) continue;
-        std::vector<uint8_t> fh_akm_bytes = util::akm_to_bytes(fh_akms_vec[i]);
-        if (fh_akm_bytes.size() != 4) {
-            em_printfout("Warning: Could not map fronthaul AKM string '%s' to AKM suite bytes, skipping", fh_akms_vec[i].c_str());
-            continue;
-        }
-        // OUI is first 3 bytes, suite type is last byte
-        memcpy(fh_akm_suite[i].oui, fh_akm_bytes.data(), 3);
-        fh_akm_suite[i].akm_suite_type = fh_akm_bytes[3];
-    }
-
-    return static_cast<int>(tlv_size);
-}
-
 int em_configuration_t::create_bss_conf_req_tlv(uint8_t *buff)
 {
     ASSERT_NOT_NULL(buff, -1, "%s:%d: Buffer is null\n", __func__, __LINE__);
@@ -3816,11 +3779,6 @@ int em_configuration_t::handle_wsc_m1(unsigned char *buff, unsigned int len)
             memcpy(dev_info.serial_number, attr->val, htons(attr->len));
             set_serial_number(dev_info.serial_number);
             //printf("%s:%d: Manufacturer:%s\n", __func__, __LINE__, dev_info.serial_number);
-            if( dm->get_colocated() == false )
-            {
-                memcpy(dm->m_device.m_device_info.backhaul_alid.mac, dm->get_ctrl_al_interface_mac(), sizeof(mac_address_t));
-            }
-
             em_printfout("Updated dm dev_info's backhaul_mac: %s and backhaul_alid: %s",
                 util::mac_to_string(dm->m_device.m_device_info.backhaul_mac.mac).c_str(),
                 util::mac_to_string(dm->m_device.m_device_info.backhaul_alid.mac).c_str());
@@ -5351,6 +5309,7 @@ void em_configuration_t::process_msg(unsigned char *data, unsigned int len)
             if ((get_service_type() == em_service_type_ctrl) && (get_state() == em_state_ctrl_topo_sync_pending)){
                 if (handle_topology_response(data, len) == 0) {
                     set_state(em_state_ctrl_topo_synchronized);
+                    static_cast<em_t*>(this)->set_ssid_mismatch(false);
                     std::vector<em_t *> em_radios;
                     dm_easy_mesh_t *dm = get_data_model();
                     em_printfout("Topology response handled successfully by em radio:%s agent al_mac:%s src_mac:%s",
@@ -5359,9 +5318,13 @@ void em_configuration_t::process_msg(unsigned char *data, unsigned int len)
                     get_mgr()->get_all_em_for_al_mac(hdr->src, em_radios);
                     for (auto &em : em_radios) {
                         em->set_state(em_state_ctrl_topo_synchronized);
+                        em->set_ssid_mismatch(false);
                         printf("%s:%d em_msg_type_topo_resp handle success, state: %s\n", __func__, __LINE__, em_t::state_2_str(em->get_state()));
                     }
                     em_radios.clear();
+                    //Reset the mismatch and topo_query_last sent values
+                    dm->set_ssid_mismatch_check_time(0);
+                    dm->set_last_topo_query_sent_time(0);
                     // update network topology here
                     get_mgr()->update_network_topology();
                     dm->set_topo_state(true);
@@ -5537,7 +5500,7 @@ void em_configuration_t::fill_media_data(em_media_spec_data_t *spec, dm_bss_t *b
             spec->band = 0x03;
             break;
 
-        case em_freq_band_60:
+        case em_freq_band_6:
             spec->band = 0x04;
             break;
 
@@ -5588,18 +5551,29 @@ void em_configuration_t::process_ctrl_state()
             break;
 
         case em_state_ctrl_topo_sync_pending:
+        {
+            std::vector<em_t *> em_radios;
+            dm_easy_mesh_t *dm = get_data_model();
+            get_mgr()->get_all_em_for_al_mac(dm->get_agent_al_interface_mac(), em_radios);
+
+            // Evaluate SSID mismatch across this AL's radios only.
+            bool ssid_mismatch_present = std::any_of(em_radios.begin(), em_radios.end(), [](em_t *radio) {
+                return radio->get_ssid_mismatch();
+            });
+
+            if (ssid_mismatch_present == false)
             {
-                std::vector<em_t *> em_radios;
-                dm_easy_mesh_t *dm = get_data_model();
-                get_mgr()->get_all_em_for_al_mac(dm->get_agent_al_interface_mac(), em_radios);
                 for (auto &em : em_radios) {
                     if (em->get_state() != em_state_ctrl_topo_sync_pending) {
-                        em_printfout("radio %s is not in topo sync pending state, ignoring",
-                            util::mac_to_string(em->get_radio_interface_mac()).c_str());
+                        em_printfout("radio %s is in state:%d, not in topo sync pending state, ignoring",
+                            util::mac_to_string(em->get_radio_interface_mac()).c_str(), em->get_state());
                         em_radios.clear();
                         return;
                     }
                 }
+                // Reset the mismatch and topo_query_last sent values before sending topo query
+                dm->set_ssid_mismatch_check_time(0);
+                dm->set_last_topo_query_sent_time(0);
                 // If all radios are in topo sync pending state, send topo query on one of them, 
                 // ignore sending topo query on other radios
                 if (this == em_radios.front()){
@@ -5612,6 +5586,7 @@ void em_configuration_t::process_ctrl_state()
                 }
                 em_radios.clear();
             }
+        }
             break;
 
         case em_state_ctrl_ap_mld_config_pending:

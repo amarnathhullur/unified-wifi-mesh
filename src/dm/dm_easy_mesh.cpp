@@ -55,6 +55,11 @@ dm_easy_mesh_t& dm_easy_mesh_t::operator = (dm_easy_mesh_t const& obj)
     em_long_string_t key;
     mac_addr_str_t radio_mac_str, bss_mac_str, sta_mac_str;
 
+    // Self-assignment check
+    if (this == &obj) {
+        return *this;
+    }
+
     m_device = obj.m_device;
     m_network = obj.m_network;
     m_ieee_1905_security = obj.m_ieee_1905_security;
@@ -65,6 +70,10 @@ dm_easy_mesh_t& dm_easy_mesh_t::operator = (dm_easy_mesh_t const& obj)
     this->m_num_radios = obj.m_num_radios;
     for (unsigned int i = 0; i < obj.m_num_radios; i++) {
         m_radio[i] = obj.m_radio[i];
+    }
+
+    for(unsigned int i = 0; i < EM_MAX_BANDS; i++) {
+        m_radio_cap[i] = obj.m_radio_cap[i];
     }
 
     this->m_num_bss = obj.m_num_bss;
@@ -115,6 +124,7 @@ int dm_easy_mesh_t::commit_config(dm_easy_mesh_t& dm, em_commit_target_t target)
 {
     unsigned int i, j = 0, found = 0;
     dm_radio_t *radio;
+    dm_radio_cap_t *radio_cap;
     mac_address_t mac;
     mac_addr_str_t mac_str;
 
@@ -135,8 +145,17 @@ int dm_easy_mesh_t::commit_config(dm_easy_mesh_t& dm, em_commit_target_t target)
             }
             if (i == m_num_radios) { //New Radio
                 m_radio[m_num_radios] = *(radio);
+                radio_cap = dm.get_radio_cap(mac);
+                if (radio_cap != NULL) {
+                    m_radio_cap[m_num_radios] = *(radio_cap);
+                } else {
+                    /* Capabilities not yet available for this radio; use default/empty caps */
+                    m_radio_cap[m_num_radios].init();
+                    em_printfout("Radio capabilities for %s not available; using default capabilities", target.params);
+                }
+
                 m_num_radios = m_num_radios + 1;
-                printf("%s:%d New Radio %s configuration created no of radios=%d\n", __func__, __LINE__,target.params,m_num_radios);
+                em_printfout("New Radio %s configuration created no of radios=%d", target.params, m_num_radios);
             }
 			//Commit op class
 			for (i = 0; i<dm.m_num_opclass; i++) {
@@ -168,7 +187,7 @@ int dm_easy_mesh_t::commit_config(dm_easy_mesh_t& dm, em_commit_target_t target)
 					}
 				}
         	}
-		}	
+		}
     } else if (target.type == em_commit_target_bss) {
         printf("%s:%d Commit radio=%s\n", __func__, __LINE__,target.params);
         string_to_macbytes(reinterpret_cast<char *> (target.params),mac);
@@ -926,158 +945,198 @@ int dm_easy_mesh_t::decode_config_set_policy(em_subdoc_info_t *subdoc, const cha
 {
 	cJSON *parent_obj, *net_obj, *net_obj_id, *dev_arr_obj, *dev_obj, *dev_obj_id, *policy_obj; 
 	cJSON *ap_metrics_obj, *scan_obj, *radio_metrics_arr_obj, *radio_steer_arr_obj, *local_steer_obj, *btm_steer_obj;
-	cJSON *backhaul_obj, *radio_id_obj, *radio_metrics_obj, *radio_steer_obj, *traffic_sep_obj;
+	cJSON *backhaul_obj, *radio_id_obj, *radio_metrics_obj, *radio_steer_obj;
 	unsigned int num_devices = 0;
 	int i;
 	char *dev_mac_str, *net_id;
 	em_long_string_t parent;
+    cJSON *alarm_obj, *client_obj;
 
     parent_obj = cJSON_Parse(subdoc->buff);
     if (parent_obj == NULL) {
-        printf("%s:%d: Failed to parse: %s\n", __func__, __LINE__, subdoc->buff);
+        em_printfout("Failed to parse: %s",subdoc->buff);
         return EM_PARSE_ERR_GEN;
     }
 
-    if ((net_obj = cJSON_GetObjectItem(parent_obj, key)) == NULL) {
-        printf("%s:%d: Failed to parse: %s\n", __func__, __LINE__, subdoc->buff);
-        cJSON_Delete(parent_obj);
-        return EM_PARSE_ERR_GEN;
-    }
-
-    if ((net_obj = cJSON_GetObjectItem(net_obj, "Network")) == NULL) {
-        printf("%s:%d: Failed to parse: %s\n", __func__, __LINE__, subdoc->buff);
+    /* Look for 'Network' either under provided wrapper key or at top-level */
+    cJSON *wrapper_obj = NULL;
+    if (key != NULL && (wrapper_obj = cJSON_GetObjectItem(parent_obj, key)) != NULL) {
+        char *tmp = cJSON_PrintUnformatted(wrapper_obj);
+        //em_printfout("Found wrapper key '%s'. Wrapper: %s",key, tmp ? tmp : "<null>");
+        if (tmp) free(tmp);
+        net_obj = cJSON_GetObjectItem(wrapper_obj, "Network");
+        if (net_obj == NULL) {
+            char *tmp2 = cJSON_PrintUnformatted(wrapper_obj);
+            em_printfout("Wrapper '%s' present but no 'Network' child. Wrapper JSON: %s",key, tmp2 ? tmp2 : "<null>");
+            if (tmp2) free(tmp2);
+            cJSON_Delete(parent_obj);
+            return EM_PARSE_ERR_GEN;
+        }
+    } else if ((net_obj = cJSON_GetObjectItem(parent_obj, "Network")) != NULL) {
+        char *tmp = cJSON_PrintUnformatted(net_obj);
+        //em_printfout("Found top-level 'Network'. Network: %s",tmp ? tmp : "<null>");
+        if (tmp) free(tmp);
+    } else {
+        char *tmp = cJSON_PrintUnformatted(parent_obj);
+        em_printfout("Neither wrapper key '%s' nor top-level 'Network' found. Payload: %s",key ? key : "<null>", tmp ? tmp : "<null>");
+        if (tmp) free(tmp);
         cJSON_Delete(parent_obj);
         return EM_PARSE_ERR_GEN;
     }
 
     if ((net_obj_id = cJSON_GetObjectItem(net_obj, "ID")) == NULL) {
-        printf("%s:%d: Network ID not present\n", __func__, __LINE__);
+        em_printfout("Network ID not present", __func__, __LINE__);
         cJSON_Delete(parent_obj);
         return EM_PARSE_ERR_NET_ID;
     }
 
-	if ((net_id = cJSON_GetStringValue(net_obj_id)) == NULL) {
-        printf("%s:%d: Network ID not present\n", __func__, __LINE__);
+    if ((net_id = cJSON_GetStringValue(net_obj_id)) == NULL) {
+        em_printfout("Network ID not present", __func__, __LINE__);
         cJSON_Delete(parent_obj);
         return EM_PARSE_ERR_NET_ID;
-	}
+    }
 
     snprintf(m_network.m_net_info.id, sizeof(em_long_string_t), "%s", net_id);
 
-    if ((dev_arr_obj = cJSON_GetObjectItem(net_obj, "DeviceList")) == NULL) {
-        printf("%s:%d: Failed to parse: %s\n", __func__, __LINE__, subdoc->buff);
+    /* Accept either an array 'DeviceList' or a single object 'Device' for backward compatibility */
+    if ((dev_arr_obj = cJSON_GetObjectItem(net_obj, "DeviceList")) != NULL) {
+
+        num_devices = static_cast<unsigned int> (cJSON_GetArraySize(dev_arr_obj));
+        *num = num_devices;
+
+        // check if the index passed is within range
+        if (index >= num_devices) {
+            em_printfout("Invalid input index: %d",index);
+            cJSON_Delete(parent_obj);
+            return EM_PARSE_ERR_GEN;
+        }
+
+        if ((dev_obj = cJSON_GetArrayItem(dev_arr_obj, static_cast<int> (index))) == NULL) {
+            em_printfout("Invalid input index: %d",index);
+            cJSON_Delete(parent_obj);
+            return EM_PARSE_ERR_GEN;
+        }
+    } else if ((dev_obj = cJSON_GetObjectItem(net_obj, "Device")) != NULL) {
+        /* single Device object provided; only valid for index == 0 */
+        num_devices = 1;
+        *num = num_devices;
+        if (index != 0) {
+            em_printfout("Invalid input index for single 'Device' object: %d",index);
+            cJSON_Delete(parent_obj);
+            return EM_PARSE_ERR_GEN;
+        }
+        /* dev_obj is already set */
+    } else {
+        char *tmp = cJSON_PrintUnformatted(net_obj);
+        em_printfout("Failed to parse: no 'DeviceList' or 'Device' found. Network JSON: %s",tmp ? tmp : "<null>");
+        if (tmp) free(tmp);
         cJSON_Delete(parent_obj);
         return EM_PARSE_ERR_GEN;
     }
 
-	num_devices = static_cast<unsigned int> (cJSON_GetArraySize(dev_arr_obj));
-	*num = num_devices;
-
-	// check if the index passed is within range
-	if (index >= num_devices) {
-        printf("%s:%d: Invalid input index: %d\n", __func__, __LINE__, index);
-        cJSON_Delete(parent_obj);
-        return EM_PARSE_ERR_GEN;
-	}
-
-	if ((dev_obj = cJSON_GetArrayItem(dev_arr_obj, static_cast<int> (index))) == NULL) {
-        printf("%s:%d: Invalid input index: %d\n", __func__, __LINE__, index);
-        cJSON_Delete(parent_obj);
-        return EM_PARSE_ERR_GEN;
-	}
-
-	if ((dev_obj_id = cJSON_GetObjectItem(dev_obj, "ID")) == NULL) {
-        printf("%s:%d: Failed to parse: %s\n", __func__, __LINE__, subdoc->buff);
+    if ((dev_obj_id = cJSON_GetObjectItem(dev_obj, "ID")) == NULL) {
+        em_printfout("Failed to parse: %s",subdoc->buff);
         cJSON_Delete(parent_obj);
         return EM_PARSE_ERR_GEN;
     }
 
-	if ((dev_mac_str = cJSON_GetStringValue(dev_obj_id)) == NULL) {
-        printf("%s:%d: Dev Obj ID not present\n", __func__, __LINE__);
+    if ((dev_mac_str = cJSON_GetStringValue(dev_obj_id)) == NULL) {
+        em_printfout("Dev Obj ID not present", __func__, __LINE__);
         cJSON_Delete(parent_obj);
         return EM_PARSE_ERR_NET_ID;
-	}
+    }
 
-	dm_easy_mesh_t::string_to_macbytes(dev_mac_str, m_device.m_device_info.intf.mac);
+    dm_easy_mesh_t::string_to_macbytes(dev_mac_str, m_device.m_device_info.intf.mac);
 
-	if ((policy_obj = cJSON_GetObjectItem(dev_obj, "Policy")) == NULL) {
-        printf("%s:%d: Failed to parse: %s\n", __func__, __LINE__, subdoc->buff);
+    if ((policy_obj = cJSON_GetObjectItem(dev_obj, "Policy")) == NULL) {
+        em_printfout("Failed to parse: %s", subdoc->buff);
         cJSON_Delete(parent_obj);
         return EM_PARSE_ERR_GEN;
     }
 
-	if ((ap_metrics_obj = cJSON_GetObjectItem(policy_obj, "AP Metrics Reporting Policy")) != NULL) {
-		snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
-					em_policy_id_type_ap_metrics_rep);
-		m_policy[m_num_policy].decode(ap_metrics_obj, parent, em_policy_id_type_ap_metrics_rep);
-		m_num_policy++;
-    }
-
-	if ((local_steer_obj = cJSON_GetObjectItem(policy_obj, "Local Steering Disallowed Policy")) != NULL) {
-		snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
-					em_policy_id_type_steering_local);
-		m_policy[m_num_policy].decode(local_steer_obj, parent, em_policy_id_type_steering_local);
-		m_num_policy++;
-    }
-
-	if ((btm_steer_obj = cJSON_GetObjectItem(policy_obj, "BTM Steering Disallowed Policy")) != NULL) {
-		snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
-					em_policy_id_type_steering_btm);
-		m_policy[m_num_policy].decode(btm_steer_obj, parent, em_policy_id_type_steering_btm);
-		m_num_policy++;
-    }
-
-	if ((backhaul_obj = cJSON_GetObjectItem(policy_obj, "Backhaul BSS Configuration Policy")) != NULL) {
-		snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
-					em_policy_id_type_backhaul_bss_config);
-		m_policy[m_num_policy].decode(backhaul_obj, parent, em_policy_id_type_backhaul_bss_config);
-		m_num_policy++;
-    }
-
-	if ((scan_obj = cJSON_GetObjectItem(policy_obj, "Channel Scan Reporting Policy")) != NULL) {
-		snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
-					em_policy_id_type_channel_scan);
-		m_policy[m_num_policy].decode(scan_obj, parent, em_policy_id_type_channel_scan);
-		m_num_policy++;
-    }
-
-	if ((radio_metrics_arr_obj = cJSON_GetObjectItem(policy_obj, "Radio Specific Metrics Policy")) != NULL) {
-		for (i = 0; i < cJSON_GetArraySize(radio_metrics_arr_obj); i++) {
-			radio_metrics_obj = cJSON_GetArrayItem(radio_metrics_arr_obj, i);
-			radio_id_obj = cJSON_GetObjectItem(radio_metrics_obj, "ID");
-			snprintf(parent, sizeof(em_long_string_t), "%s@%s@%s@%d", net_id, dev_mac_str, cJSON_GetStringValue(radio_id_obj),
-						em_policy_id_type_radio_metrics_rep);
-			m_policy[m_num_policy].decode(radio_metrics_obj, parent, em_policy_id_type_radio_metrics_rep);
-			m_num_policy++;
-		}
-    }
-
-    if ((traffic_sep_obj = cJSON_GetObjectItem(policy_obj, "Traffic Separation Policy")) != NULL) {
+    if ((alarm_obj = cJSON_GetObjectItem(policy_obj, "Algorithm Run Policy")) != NULL) {
         snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
-                em_policy_id_type_traffic_separation);
-        m_policy[m_num_policy].decode(traffic_sep_obj, parent, em_policy_id_type_traffic_separation);
+                    em_policy_id_type_alarm_threshold);
+        m_policy[m_num_policy].decode(alarm_obj, parent, em_policy_id_type_alarm_threshold);
         m_num_policy++;
     }
 
-	if ((radio_steer_arr_obj = cJSON_GetObjectItem(policy_obj, "Radio Steering Parameters")) != NULL) {
-		for (i = 0; i < cJSON_GetArraySize(radio_steer_arr_obj); i++) {
-			radio_steer_obj = cJSON_GetArrayItem(radio_steer_arr_obj, i);
-			radio_id_obj = cJSON_GetObjectItem(radio_steer_obj, "ID");
-			snprintf(parent, sizeof(em_long_string_t), "%s@%s@%s@%d", net_id, dev_mac_str, cJSON_GetStringValue(radio_id_obj),
-						em_policy_id_type_steering_param);
-			m_policy[m_num_policy].decode(radio_steer_obj, parent, em_policy_id_type_steering_param);
-			m_num_policy++;
-		}
+    if ((client_obj = cJSON_GetObjectItem(policy_obj, "Client Filters")) != NULL) {
+        snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
+            em_policy_id_type_client_filters);
+        m_policy[m_num_policy].decode(client_obj, parent, em_policy_id_type_client_filters);
+        m_num_policy++;
     }
 
+    if ((ap_metrics_obj = cJSON_GetObjectItem(policy_obj, "AP Metrics Reporting Policy")) != NULL) {
+        snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
+                    em_policy_id_type_ap_metrics_rep);
+        m_policy[m_num_policy].decode(ap_metrics_obj, parent, em_policy_id_type_ap_metrics_rep);
+        m_num_policy++;
+    }
 
-	return 0;
+    if ((local_steer_obj = cJSON_GetObjectItem(policy_obj, "Local Steering Disallowed Policy")) != NULL) {
+        snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
+                    em_policy_id_type_steering_local);
+        m_policy[m_num_policy].decode(local_steer_obj, parent, em_policy_id_type_steering_local);
+        m_num_policy++;
+    }
+
+    if ((btm_steer_obj = cJSON_GetObjectItem(policy_obj, "BTM Steering Disallowed Policy")) != NULL) {
+        snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
+                    em_policy_id_type_steering_btm);
+        m_policy[m_num_policy].decode(btm_steer_obj, parent, em_policy_id_type_steering_btm);
+        m_num_policy++;
+    }
+
+    if ((backhaul_obj = cJSON_GetObjectItem(policy_obj, "Backhaul BSS Configuration Policy")) != NULL) {
+        snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
+                    em_policy_id_type_backhaul_bss_config);
+        m_policy[m_num_policy].decode(backhaul_obj, parent, em_policy_id_type_backhaul_bss_config);
+        m_num_policy++;
+    }
+
+    if ((scan_obj = cJSON_GetObjectItem(policy_obj, "Channel Scan Reporting Policy")) != NULL) {
+        snprintf(parent, sizeof(em_long_string_t), "%s@%s@00:00:00:00:00:00@%d", net_id, dev_mac_str,
+                    em_policy_id_type_channel_scan);
+        m_policy[m_num_policy].decode(scan_obj, parent, em_policy_id_type_channel_scan);
+        m_num_policy++;
+    }
+
+    if ((radio_metrics_arr_obj = cJSON_GetObjectItem(policy_obj, "Radio Specific Metrics Policy")) != NULL) {
+        for (i = 0; i < cJSON_GetArraySize(radio_metrics_arr_obj); i++) {
+            radio_metrics_obj = cJSON_GetArrayItem(radio_metrics_arr_obj, i);
+            radio_id_obj = cJSON_GetObjectItem(radio_metrics_obj, "ID");
+            if (radio_id_obj != NULL) {
+                mac_addr_t mac;
+                dm_easy_mesh_t::string_to_macbytes(cJSON_GetStringValue(radio_id_obj), mac);
+                memcpy(m_policy[m_num_policy].m_policy.id.radio_mac, mac, sizeof(mac_addr_t));
+            }
+            snprintf(parent, sizeof(em_long_string_t), "%s@%s@%s@%d", net_id, dev_mac_str, cJSON_GetStringValue(radio_id_obj),
+                        em_policy_id_type_radio_metrics_rep);
+            m_policy[m_num_policy].decode(radio_metrics_obj, parent, em_policy_id_type_radio_metrics_rep);
+            m_num_policy++;
+        }
+    }
+
+    if ((radio_steer_arr_obj = cJSON_GetObjectItem(policy_obj, "Radio Steering Parameters")) != NULL) {
+        for (i = 0; i < cJSON_GetArraySize(radio_steer_arr_obj); i++) {
+            radio_steer_obj = cJSON_GetArrayItem(radio_steer_arr_obj, i);
+            radio_id_obj = cJSON_GetObjectItem(radio_steer_obj, "ID");
+            snprintf(parent, sizeof(em_long_string_t), "%s@%s@%s@%d", net_id, dev_mac_str, cJSON_GetStringValue(radio_id_obj),
+                        em_policy_id_type_steering_param);
+            m_policy[m_num_policy].decode(radio_steer_obj, parent, em_policy_id_type_steering_param);
+            m_num_policy++;
+        }
+    }
+
+    return 0;
 }
 
 int dm_easy_mesh_t::decode_config_set_channel(em_subdoc_info_t *subdoc, const char *key, unsigned int index, unsigned int *num)
 {
     cJSON *parent_obj, *net_obj, *net_obj_id; 
-	cJSON *target_arr_obj, *target_obj, *channel_arr_obj;
+    cJSON *target_arr_obj, *target_obj, *channel_arr_obj, *channel_pref_arry_obj;
     int i, j, arr_size;
     char *net_id;
 	em_long_string_t	target_key;	
@@ -1149,13 +1208,19 @@ int dm_easy_mesh_t::decode_config_set_channel(em_subdoc_info_t *subdoc, const ch
         	return -1;
 		}
 
+		if ((channel_pref_arry_obj = cJSON_GetObjectItem(target_obj, "ChannelPrefList")) == NULL) {
+			cJSON_Delete(parent_obj);
+			em_printfout("Error: %s not present\n", target_key);
+			return -1;
+		}
+
 		m_op_class[m_num_opclass].m_op_class_info.num_channels = 0;
 
 		for (j = 0; j < cJSON_GetArraySize(channel_arr_obj); j++) {
 			m_op_class[m_num_opclass].m_op_class_info.channels[m_op_class[m_num_opclass].m_op_class_info.num_channels] = static_cast<unsigned int> (cJSON_GetNumberValue(cJSON_GetArrayItem(channel_arr_obj, j)));
+			m_op_class[m_num_opclass].m_op_class_info.channel_pref[m_op_class[m_num_opclass].m_op_class_info.num_channels] = static_cast<unsigned int> (cJSON_GetNumberValue(cJSON_GetArrayItem(channel_pref_arry_obj, j)));
 			m_op_class[m_num_opclass].m_op_class_info.num_channels++;
-		}	
-
+		}
 		m_num_opclass++;
 	}	
 	
@@ -1650,6 +1715,26 @@ void dm_easy_mesh_t::string_to_macbytes(char *key, mac_address_t bmac)
 
 }
 
+void dm_easy_mesh_t::maclist_to_string(mac_address_t mac_list[], size_t mac_count, char *string, uint16_t str_len)
+{
+    uint8_t idx = 0;
+
+    if (mac_list == NULL) {
+        return;
+    }
+
+    while (str_len >= sizeof(mac_addr_str_t) && idx < mac_count) {
+        dm_easy_mesh_t::macbytes_to_string(mac_list[idx], string);
+        string += (sizeof(mac_addr_str_t) - 1);
+        str_len -= sizeof(mac_addr_str_t);
+        if (++idx >= mac_count || str_len == 0) {
+            break;
+        }
+        *string = ',';
+        ++string;
+    }
+}
+
 void dm_easy_mesh_t::securitymode_to_str(unsigned short mode, char *sec_mode_str, size_t len)
 {
     if (mode == EM_AUTH_OPEN)
@@ -1907,12 +1992,28 @@ dm_radio_t *dm_easy_mesh_t::get_radio(const mac_address_t mac)
 dm_radio_cap_t *dm_easy_mesh_t::get_radio_cap(mac_address_t mac)
 {
     unsigned int i = 0;
+
     for (i = 0; i < m_num_radios; i++) {
         if (memcmp(m_radio_cap[i].m_radio_cap_info.ruid.mac, mac, sizeof(mac_address_t)) == 0) {
             return &m_radio_cap[i];
         }
     }
     return NULL;
+}
+
+dm_radio_cap_t *dm_easy_mesh_t::get_radio_cap(int index)
+{
+    if ((index < 0) || (index >= EM_MAX_BANDS)) {
+        return nullptr;
+    }
+
+    return &m_radio_cap[index];
+}
+
+em_radio_cap_info_t *dm_easy_mesh_t::get_radio_cap_info(int index)
+{
+    dm_radio_cap_t *cap = get_radio_cap(index);
+    return cap ? cap->get_radio_cap_info() : nullptr;
 }
 
 dm_radio_t *dm_easy_mesh_t::find_matching_radio(dm_radio_t *radio)
@@ -1943,44 +2044,43 @@ dm_device_t *dm_easy_mesh_t::find_matching_device(dm_device_t *dev)
 void dm_easy_mesh_t::print_config()
 {
     unsigned int i;
-    mac_addr_str_t  ctrl_mac, ctrl_al_mac, agent_al_mac, radio_mac, mac_str;
     int transmit_power_limit;
 
-    dm_easy_mesh_t::macbytes_to_string(get_controller_interface_mac(), ctrl_mac);
-    dm_easy_mesh_t::macbytes_to_string(get_ctrl_al_interface_mac(), ctrl_al_mac);
-    dm_easy_mesh_t::macbytes_to_string(get_agent_al_interface_mac(), agent_al_mac);
-	printf("%s:%d:Network:%s\n", __func__, __LINE__, m_network.m_net_info.id);
-    printf("%s:%d:Controller MAC:%s\tController AL MAC:%s\tAgent AL MAC:%s\n", __func__, __LINE__,
-            ctrl_mac, ctrl_al_mac, agent_al_mac);
-    printf("%s:%d:Manufacturer:%s\tManufacturere Model:%s\tSoftwareVersion:%s\n", __func__, __LINE__,
+	em_printfout("Network:%s", m_network.m_net_info.id);
+    em_printfout("Controller MAC:%s\tController AL MAC:%s\tAgent AL MAC:%s\n",
+            util::mac_to_string(get_controller_interface_mac()).c_str(),
+            util::mac_to_string(get_ctrl_al_interface_mac()).c_str(),
+            util::mac_to_string(get_agent_al_interface_mac()).c_str());
+    em_printfout("Manufacturer:%s\tManufacturere Model:%s\tSoftwareVersion:%s\n",
             get_manufacturer(), get_manufacturer_model(), get_software_version());
 
     for (i = 0; i < m_num_net_ssids; i++) {
-        printf("%s:%d:Data Model SSID[%d]: %s\n", __func__, __LINE__, i, m_network_ssid[i].m_network_ssid_info.ssid);
+        em_printfout("Data Model SSID[%d]: %s\n", m_network_ssid[i].m_network_ssid_info.ssid);
     }
 
     for (i = 0; i < m_num_opclass; i++) {
-        dm_easy_mesh_t::macbytes_to_string(m_op_class[i].m_op_class_info.id.ruid, radio_mac);
-        //printf("%s:%d: OpClass[%d] id.ruid: %s id.type: %d id.index: %d Channel : %d Op_class : %d num_channel : %d Max tx_p : %d\n\n", 
-		//		__func__, __LINE__, i, radio_mac, m_op_class[i].m_op_class_info.id.type, 
+        //em_printfout("OpClass[%d] id.ruid: %s id.type: %d id.index: %d Channel : %d Op_class : %d num_channel : %d Max tx_p : %d\n\n", 
+		//		i, util::mac_to_string(m_op_class[i].m_op_class_info.id.ruid).c_str(), m_op_class[i].m_op_class_info.id.type, 
 		//		m_op_class[i].m_op_class_info.id.op_class, m_op_class[i].m_op_class_info.channel, 
 		//		m_op_class[i].m_op_class_info.op_class, m_op_class[i].m_op_class_info.num_channels, m_op_class[i].m_op_class_info.max_tx_power);
     }
 
-    printf("%s:%d:No of BSS=%d No of Radios=%d \n", __func__, __LINE__, m_num_bss, m_num_radios);
+    em_printfout("No of BSS=%d No of Radios=%d", m_num_bss, m_num_radios);
     for (i = 0; i < m_num_bss; i++) {
-        dm_easy_mesh_t::macbytes_to_string(get_bss(i)->get_bss_info()->ruid.mac, mac_str);
-        printf("%s:%d:Radio Mac : %s ", __func__, __LINE__, mac_str);
-        dm_easy_mesh_t::macbytes_to_string(get_bss(i)->get_bss_info()->bssid.mac, mac_str);
-        printf("BSSID : %s\n", mac_str);
+        em_printfout("Radio Mac : %s and BSSID : %s", util::mac_to_string(get_bss(i)->get_bss_info()->ruid.mac).c_str(),
+            util::mac_to_string(get_bss(i)->get_bss_info()->bssid.mac).c_str());
     }
 
     for (i = 0;i < m_num_radios; i++) {
-        dm_easy_mesh_t::macbytes_to_string(m_radio[i].get_radio_info()->intf.mac, mac_str);
         transmit_power_limit = m_radio[i].get_radio_info()->transmit_power_limit;
-        printf("%s:%d:Radio Mac: %s \n", __func__, __LINE__, mac_str);
-        printf("%s:%d:Radio Band: %d \n", __func__, __LINE__, m_radio[i].get_radio_info()->band);
-        printf("%s:%d:TransmitPowerLimit: %d \n", __func__, __LINE__, transmit_power_limit);
+        em_printfout("Radio Mac: %s, Band: %d, TransmitPowerLimit: %d", util::mac_to_string(m_radio[i].get_radio_info()->intf.mac).c_str(),
+            m_radio[i].get_radio_info()->band, transmit_power_limit);
+    }
+
+    for(i = 0; i < m_num_radios; i++) {
+        em_printfout("Cap Radio[%d]: %s, num_role:%d and su_beam:%d",  i, util::mac_to_string(m_radio_cap[i].get_radio_cap_info()->ruid.mac).c_str(),
+            m_radio_cap[i].get_radio_cap_info()->wifi6_cap.num_role,
+            m_radio_cap[i].get_radio_cap_info()->wifi6_cap.roles[0].role_tail.su_beam_former);
     }
 }
 
@@ -2033,21 +2133,21 @@ em_e4_table_t dm_easy_mesh_t::m_e4_table[] = {
 	{ 128, em_freq_band_5, 80, 6, {36, 52, 100, 116, 132, 149} },
 	{ 129, em_freq_band_5, 160, 2, {36, 100} },
 	{ 130, em_freq_band_5, 80, 6, {36, 52, 100, 116, 132, 149} },
-	{ 131, em_freq_band_60, 20, 59, {1, 5, 9, 13, 17, 21, 25, 29, 33, 37,
+	{ 131, em_freq_band_6, 20, 59, {1, 5, 9, 13, 17, 21, 25, 29, 33, 37,
 				41, 45, 49, 53, 57, 61, 65, 69, 73, 77,
 				81, 85, 89, 93, 97, 101, 105, 109, 113, 117,
 				121, 125, 129, 133, 137, 141, 145, 149, 153, 157,
 				161, 165, 169, 173, 177, 181, 185, 189, 193, 197,
 				201, 205, 209, 213, 217, 221, 225, 229, 233} },
-	{ 132, em_freq_band_60, 40, 29, {1, 9, 17, 25, 33, 41, 49, 57, 65, 73,
+	{ 132, em_freq_band_6, 40, 29, {1, 9, 17, 25, 33, 41, 49, 57, 65, 73,
 				81, 89, 95, 105, 113, 121, 129, 137, 145, 153,
 				161, 169, 177, 185, 193, 201, 209, 217, 225} },
-	{ 133, em_freq_band_60, 80, 14, {1, 17, 33, 49, 65, 81, 97, 113, 129, 145,
+	{ 133, em_freq_band_6, 80, 14, {1, 17, 33, 49, 65, 81, 97, 113, 129, 145,
 				161, 177, 193, 209} },
-	{ 134, em_freq_band_60, 160, 7, {1, 33, 65, 97, 129, 161, 193} },
-	{ 135, em_freq_band_60, 80, 14, {1, 17, 33, 49, 65, 81, 97, 113, 129, 145,
+	{ 134, em_freq_band_6, 160, 7, {1, 33, 65, 97, 129, 161, 193} },
+	{ 135, em_freq_band_6, 80, 14, {1, 17, 33, 49, 65, 81, 97, 113, 129, 145,
 				161, 177, 193, 209} },
-	{ 136, em_freq_band_60, 20, 1, {2} }
+	{ 136, em_freq_band_6, 20, 1, {2} }
 };
 
 // Function to get frequency band by operating class
@@ -2111,7 +2211,7 @@ void dm_easy_mesh_t::create_autoconfig_renew_json_cmd(char* src_mac_addr, char* 
         case em_freq_band_5:
             op_class =  EM_MIN_OP_CLASS_5;
             break;
-        case em_freq_band_60:
+        case em_freq_band_6:
             op_class = EM_MIN_OP_CLASS_6;
             break;
         default:
@@ -2177,6 +2277,18 @@ void dm_easy_mesh_t::create_client_cap_query_json_cmd(char* src_mac_addr, char* 
     size_t tmp_length = strlen(tmp) + 1;
     snprintf(ap_query_json, tmp_length, "%s", tmp);
     cJSON_Delete(root);
+}
+
+bool dm_easy_mesh_t::is_ssid_match(const ssid_t &ssid)
+{
+    em_network_ssid_info_t *info;
+    for (unsigned int i = 0; i < m_num_net_ssids; i++) {
+        info = &m_network_ssid[i].m_network_ssid_info;
+        if (strncmp(info->ssid, ssid, sizeof(info->ssid)) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 em_network_ssid_info_t *dm_easy_mesh_t::get_network_ssid_info_by_haul_type(em_haul_type_t haul_type)
@@ -2992,6 +3104,7 @@ void dm_easy_mesh_t::reset()
     m_num_ap_mld = 0;
 	m_db_cfg_param.db_cfg_type = db_cfg_type_none;
     m_colocated = false;
+    m_is_ctlr = false;
 
 	memset(&m_network.m_net_info, 0, sizeof(em_network_info_t));
 	memset(&m_device.m_device_info, 0, sizeof(em_device_info_t));
@@ -3021,6 +3134,7 @@ dm_easy_mesh_t::dm_easy_mesh_t()
     m_num_net_ssids = 0;
 	m_db_cfg_param.db_cfg_type = db_cfg_type_none;
     m_colocated = false;
+    m_is_ctlr = false;
 }
 
 dm_easy_mesh_t::~dm_easy_mesh_t()

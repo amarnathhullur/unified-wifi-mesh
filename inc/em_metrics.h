@@ -294,6 +294,7 @@ class em_metrics_t {
 	 * @note Ensure that the buffer is properly allocated and the length is correctly specified.
 	 */
 	int handle_ap_metrics_response(unsigned char *buff, unsigned int len);
+	int handle_vendor_msg(unsigned char *buff, unsigned int len);
 
   	/**!
 	 * @brief Handles the AP metrics tlv.
@@ -308,6 +309,8 @@ class em_metrics_t {
 	 * @note Ensure that the buffer is properly allocated.
 	 */
 	int handle_ap_metrics_tlv(unsigned char *buff, bssid_t bssid);
+
+	int handle_link_stats_alarm_rprt_tlv(unsigned char *buff, size_t len);
 
 	/**!
 	 * @brief Creates an association station link metrics TLV.
@@ -434,6 +437,8 @@ class em_metrics_t {
 	 * @note Ensure that the network connection is established before calling this function.
 	 */
 	int send_ap_metrics_response();
+
+	int send_link_quality_report();
     
 	/**!
 	 * @brief Creates a beacon metrics response TLV.
@@ -491,7 +496,7 @@ class em_metrics_t {
 	 *
 	 * @note Ensure that the buffer is large enough to hold the TLV.
 	 */
-	short create_radio_metrics_tlv(unsigned char *buff);
+	short create_radio_metrics_tlv(unsigned char *buff, int index);
     
 	/**!
 	 * @brief Creates an associated station traffic statistics TLV.
@@ -525,6 +530,8 @@ class em_metrics_t {
 	 * @note Ensure that the buffer is adequately sized to hold the TLV report.
 	 */
 	short create_assoc_wifi6_sta_sta_report_tlv(unsigned char *buff, const dm_sta_t *const sta);
+
+	short create_link_stats_alarm_tlv(unsigned char *buff);
 
 public:
 

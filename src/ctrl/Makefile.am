@@ -104,8 +104,9 @@ onewifi_em_ctrl_SOURCES =  \
      $(top_srcdir)/src/ctrl/em_ctrl.cpp \
      $(top_srcdir)/src/ctrl/em_network_topo.cpp \
      $(top_srcdir)/src/ctrl/em_dev_test_ctrl.cpp \
-     $(top_srcdir)/src/ctrl/tr_181/tr_181_param.cpp \
      $(top_srcdir)/src/ctrl/tr_181/wfa_data_model/tr_181.cpp \
+     $(top_srcdir)/src/ctrl/tr_181/wfa_data_model/tr_181_method.cpp \
+     $(top_srcdir)/src/ctrl/tr_181/wfa_data_model/tr_181_helper.cpp\
      $(top_srcdir)/src/db/db_client.cpp \
      $(top_srcdir)/src/db/db_column.cpp \
      $(top_srcdir)/src/db/db_easy_mesh.cpp \
@@ -236,7 +237,9 @@ onewifi_em_ctrl_test_SOURCES = $(onewifi_em_ctrl_SOURCES) \
 	$(top_srcdir)/tests/test_l1_ec_enrollee.cpp \
 	$(top_srcdir)/tests/test_l1_ec_util.cpp \
 	$(top_srcdir)/tests/test_l1_em_ctrl.cpp \
-	$(top_srcdir)/tests/test_l1_dm_easy_mesh.cpp
+	$(top_srcdir)/tests/test_l1_dm_easy_mesh.cpp \
+	$(top_srcdir)/tests/test_l1_ec_pa_configurator.cpp \
+	$(top_srcdir)/tests/test_l1_ec_manager.cpp
 onewifi_em_ctrl_test_CPPFLAGS = $(onewifi_em_ctrl_CPPFLAGS) \
                                 -I$(PKG_CONFIG_SYSROOT_DIR)$(includedir)/gtest \
                                 -DTESTING

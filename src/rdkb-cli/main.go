@@ -53,6 +53,7 @@ import (
 )
 
 const remoteCtrl_Addr_path = "/nvram/remoteCtrl.json"
+var nonHex = regexp.MustCompile(`[^a-fA-F0-9]`)
 var timerCount = 0
 
 // ===== SIMPLIFIED DATA MODELS =====
@@ -380,9 +381,15 @@ type RadioConfig struct {
 	DFSEnabled      bool              `json:"dfs_enabled,omitempty"`
 	PSCOnly         bool              `json:"psc_only,omitempty"`
 	WiFi7Features   *WiFi7Features    `json:"wifi7_features,omitempty"`
-	SupportedClass  []ClassInfo       `json:"supported_class"`
-	SelectedConfig  channelConfig     `json:"selected_config,omitempty"`
+	DeviceList      []WifiChannelConfig      `json:"device_list"`
 }
+
+type WifiChannelConfig struct {
+    DeviceID       string           `json:"device_id"`
+    SupportedClass []ClassInfo      `json:"supported_class"`
+    SelectedConfig []channelConfig  `json:"selected_config,omitempty"`
+}
+
 type WiFi7Features struct {
 	MLOEnabled          bool `json:"mlo_enabled"`
 	MultiRUEnabled      bool `json:"multi_ru_enabled"`
@@ -407,9 +414,12 @@ type ClassInfo struct {
 
 // channelConfig struct to store previous configuration
 type channelConfig struct {
+	DeviceID    string `json:"device_id,omitempty"`
+	RadioID    string  `json:"radio_id"`
 	RadioIndex int     `json:"radio_index"`
 	Class      int     `json:"class"`
 	Channels   []int   `json:"channels"`
+	Preferences []int  `json:"preferences"`
 }
 
 type AdvancedWirelessSettings struct {
@@ -469,6 +479,47 @@ type ChannelRecommendation struct {
 	Reason            string  `json:"reason"`
 	ExpectedImprovement float64 `json:"expected_improvement_percent"`
 }
+
+type APMetricReporting struct {
+	Interval            int       `json:"interval"`
+	ManagedClientMarker string    `json:"managedClientMarker"`
+}
+
+type Default802_1Q_Settings struct {
+	PrimaryVLANID   int     `json:"primaryVLANID"`
+	DefaultPCP      int     `json:"defaultPCP"`
+}
+
+type RadioSpecificMetrics struct {
+	ID                      string   `json:"id"`
+	STARCPIThreshold        int      `json:"starCPIThreshold"`
+	STARCPIHysteresis       int      `json:"starCPIHysteresis"`
+	APUtilizationThreshold  int      `json:"apUtilizationThreshold"`
+	STATrafficStats         int      `json:"staTrafficStats"`
+	STALinkMetrics          int      `json:"staLinkMetrics"`
+	STAStatus               int      `json:"staStatus"`
+}
+
+type RadioSteeringParameters struct  {
+	ID                    string   `json:"id"`
+    SteeringPolicy        int      `json:"steeringPolicy"`
+    UtilizationThreshold  int      `json:"utilizationThreshold"`
+    RCPIThreshold         int      `json:"rcpiThreshold"`
+}
+
+type wifiPolicyConfig struct {
+	ID                             string                  `json:"id"`
+	MediaType                      string                  `json:"mediaType"`
+	APMetricReportingPolicy        APMetricReporting       `json:"apMetricReportingPolicy,omitempty"`
+	LocalSteeringDisallowed        []string                `json:"localSteeringDisallowed"`
+	BTMSteeringDisallowed          []string                `json:"btmSteeringDisallowed"`
+	ReportIndependentChannelScans  int                    `json:"reportIndependentChannelScans"`
+	Default802_1Q_SettingsPolicy   Default802_1Q_Settings  `json:"default802_1Q_SettingsPolicy"`
+	RadioSpecificMetricsPolicy     []RadioSpecificMetrics    `json:"radioSpecificMetricsPolicy,omitempty"`
+	RadioSteeringParametersPolicy  []RadioSteeringParameters `json:"radioSteeringParametersPolicy,omitempty"`
+}
+
+
 //ckp end
 //ckp cov start
 // ===== COVERAGE MAP DATA STRUCTURES =====
@@ -1814,7 +1865,7 @@ func getWirelessProfilesHandler(w http.ResponseWriter, r *http.Request) {
                     http.Error(w, fmt.Sprintf("Invalid PassPhrase for %s: %v", haul.HaulType, err), http.StatusBadRequest)
                     return
                 }
-                if err := updateNetworkSSIDList(ssidTree, haul.HaulType, haul.SSID, haul.PassPhrase, haul.SecurityType, haul.Bands, haul.Enabled); err != nil {
+                if err := updateNetworkSSIDList(ssidTree, haul, true); err != nil {
                     http.Error(w, fmt.Sprintf("Update failed for %s: %v", haul.HaulType, err), http.StatusInternalServerError)
                     return
                 }
@@ -1837,7 +1888,6 @@ func getWirelessProfilesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ===== RADIO CONFIGURATION HANDLERS =====
-
 func getRadioConfigsHandler(w http.ResponseWriter, r *http.Request) {
     wirelessMutex.RLock()
     defer wirelessMutex.RUnlock()
@@ -1867,19 +1917,30 @@ func getRadioConfigsHandler(w http.ResponseWriter, r *http.Request) {
             deviceListTree := C.get_network_tree_by_key(wifiChannelTree, C.CString("DeviceList"))
             capabilityMap := getChannelCapabilityFromTree(deviceListTree)
 
-            bandLabelMap := map[int]string{0: "2.4GHz", 1: "5GHz", 2: "6GHz"}
+            bandLabelMap := map[int]string{0: "2.4GHz", 1: "5GHz", 3: "6GHz"}
 
             prevConfigMap := getConfiguredChannels(wifiChannelUpdateTree)
+
             for band, classMap := range capabilityMap {
-                prev, _ := findPrevSelection(prevConfigMap, band)
-                rc := RadioConfig{Band: bandLabelMap[band], Enabled: true, SelectedConfig: prev}
+                var supportedClasses []ClassInfo
                 for _, item := range classMap {
-                    rc.SupportedClass = append(rc.SupportedClass, ClassInfo{
+                    supportedClasses = append(supportedClasses, ClassInfo{
                         Class:   item.class,
                         Channel: item.channelList,
                     })
                 }
-                configs = append(configs, rc)
+                bandEntry := RadioConfig{
+                    Band:       bandLabelMap[band],
+                    DeviceList: make([]WifiChannelConfig, 0, len(prevConfigMap)),
+                }
+                for _, devPrev := range prevConfigMap {
+                    bandEntry.DeviceList = append(bandEntry.DeviceList, WifiChannelConfig{
+                        DeviceID:       devPrev.DeviceID,
+                        SupportedClass: supportedClasses,
+                        SelectedConfig: filterDeviceSelectionByBand(devPrev, band),
+                    })
+                }
+                configs =  append(configs, bandEntry)
             }
 
             response := map[string]interface{}{
@@ -1905,7 +1966,7 @@ func getRadioConfigsHandler(w http.ResponseWriter, r *http.Request) {
                 return
             }
 
-           applyChannelConfig(wifiChannelUpdateTree)
+            applyChannelConfig(wifiChannelUpdateTree)
 
            // Return success response
             w.Header().Set("Content-Type", "application/json")
@@ -2108,6 +2169,84 @@ func updateWirelessConfigHandler(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"message": "Wireless configuration updated successfully",
 	})
+}
+
+// ===== WIRELESS Policy HANDLERS =====
+func getWirelessPolicyHandler(w http.ResponseWriter, r *http.Request) {
+
+    // formate get policy tree
+    policyCmd := C.CString("get_policy OneWifiMesh")
+    defer C.free(unsafe.Pointer(policyCmd))
+
+    // GET policy
+    policyTree := C.exec(policyCmd, C.strlen(policyCmd), nil)
+    if policyTree == nil {
+        http.Error(w, "Failed to fetch ssid tree", http.StatusInternalServerError)
+        return
+    }
+
+    //Network node
+    cNetwork := C.CString("Network")
+    defer C.free(unsafe.Pointer(cNetwork))
+    networkNode := C.get_network_tree_by_key(policyTree, cNetwork)
+    if networkNode == nil {
+        return
+    }
+
+    // DeviceList node
+    cDeviceList := C.CString("DeviceList")
+    defer C.free(unsafe.Pointer(cDeviceList))
+    deviceListNode := C.get_network_tree_by_key(policyTree, cDeviceList)
+    if deviceListNode == nil {
+        return
+    }
+
+    switch r.Method {
+        case http.MethodGet:
+            log.Println("Received GET request for get policy\n")
+
+            configs := getPolicyConfiguration(deviceListNode)
+
+            response := map[string]interface{}{
+                "policyConfig": configs,
+                "total":     len(configs),
+            }
+
+            w.Header().Set("Content-Type", "application/json")
+            json.NewEncoder(w).Encode(response)
+
+        case http.MethodPost:
+            log.Println("Received POST request to update SSID policy")
+
+            var payload []wifiPolicyConfig
+
+            if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+                http.Error(w, "Invalid request payload", http.StatusBadRequest)
+                return
+            }
+
+            for _, policy := range payload {
+                log.Printf("Payload: %+v\n", policy)
+                if err := updatePolicySettings(deviceListNode, policy); err != nil {
+                    http.Error(w, "Policy update failed", http.StatusInternalServerError)
+                    return
+                }
+            }
+
+            if applyWifiPolicyConfig(policyTree) != true {
+                http.Error(w, fmt.Sprintf("Failed to update wifi policy"), http.StatusInternalServerError)
+            }
+
+            // Return success response
+            w.Header().Set("Content-Type", "application/json")
+            json.NewEncoder(w).Encode(map[string]interface{}{
+                "success": true,
+                "message": "Policy updated successfully",
+            })
+
+        default:
+            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+    }
 }
 
 // ===== VALIDATION FUNCTIONS =====
@@ -2652,6 +2791,10 @@ func main() {
 	// Complete Wireless Configuration
 	api.HandleFunc("/wireless/config", getWirelessConfigHandler).Methods("GET")
 	api.HandleFunc("/wireless/config", updateWirelessConfigHandler).Methods("PUT")
+
+	// Wireless Policy settings
+	api.HandleFunc("/wifipolicy", getWirelessPolicyHandler).Methods("GET", "POST")
+
         // ===== NEW COVERAGE MAP ROUTES =====
 	
 	// Coverage Analysis
@@ -3250,7 +3393,7 @@ func WifiResetHandler(w http.ResponseWriter, r *http.Request) {
     switch r.Method {
         case http.MethodGet:
             log.Println("Received GET request for wifireset")
-            collocatedValue := getTreeValue(resetTree, "CollocatedAgentID")
+            controllerValue := getTreeValue(resetTree, "ControllerID")
 
             // Interface MACs
             interfacesList := C.get_network_tree_by_key(resetTree, C.CString("List"))
@@ -3267,7 +3410,7 @@ func WifiResetHandler(w http.ResponseWriter, r *http.Request) {
 
             response := MacResponse{
                 Options:        macOptions,
-                SelectedOption: collocatedValue,
+                SelectedOption: controllerValue,
                 SSIDHaulConfig: ssidHaulConfig,
             }
 
@@ -3287,8 +3430,8 @@ func WifiResetHandler(w http.ResponseWriter, r *http.Request) {
             if payload.SelectedMac != "" {
                 selectedMac := strings.Split(payload.SelectedMac, " ")[0]
 
-                // update the CollocatedAgentID in reset tree
-                if err := updateCollocatedAgentID(resetTree, selectedMac); err != nil {
+                // update the ControllerID in reset tree
+                if err := updateControllerID(resetTree, selectedMac); err != nil {
                     msg := fmt.Sprintf("Update failed for AL_MAC Interface: %v", err)
                     errorsList = append(errorsList, msg)
                 }
@@ -3306,7 +3449,7 @@ func WifiResetHandler(w http.ResponseWriter, r *http.Request) {
                     http.Error(w, fmt.Sprintf("Invalid PassPhrase for %s: %v", haul.HaulType, err), http.StatusBadRequest)
                     return
                 }
-                if err := updateNetworkSSIDList(resetTree, haul.HaulType, haul.SSID, haul.PassPhrase, haul.SecurityType, haul.Bands, haul.Enabled); err != nil {
+                if err := updateNetworkSSIDList(resetTree, haul, false); err != nil {
                     http.Error(w, fmt.Sprintf("Update failed for %s: %v", haul.HaulType, err), http.StatusInternalServerError)
                     return
                 }
@@ -3387,19 +3530,8 @@ func getConfiguredHauls(tree *C.em_network_node_t) []HaulConfig {
         // Security mode
         securityMode = getTreeValue(node, "AuthType")
 
-        //TODO: As of now hardcoded vlanid is being used,
-        // we will update this code to fetch these details from controller and configure.
-        if haul == "Fronthaul" {
-            vlanId = 12
-        } else if haul == "Backhaul" {
-            vlanId = 13
-        }else if haul == "IoT" {
-            vlanId = 14
-        }else if haul == "Configurator" {
-            vlanId = 15
-        }else if haul == "Hotspot" {
-            vlanId = 16
-        }
+        // vlan id
+        vlanId       = getKeyIntValue(node, "VLANID")
 
         config := HaulConfig{
             Enabled: enabled,
@@ -3417,26 +3549,26 @@ func getConfiguredHauls(tree *C.em_network_node_t) []HaulConfig {
     return haulConfigs
 }
 
-/* func: updateCollocatedAgentID
+/* func: updateControllerID
  * Description:
- * updates the CollocatedAgentID value in the given reset configuration tree
+ * updates the ControllerID value in the given reset configuration tree
  * based on the selected or manually entered MAC address, validates its format,
  * and executes the reset command to apply the updated configuration.
  * Return: true or false
  */
-func updateCollocatedAgentID(resetTree *C.em_network_node_t, selectedMac string) error {
+func updateControllerID(resetTree *C.em_network_node_t, selectedMac string) error {
     if !isValidMac(selectedMac) {
         return fmt.Errorf("invalid MAC address: %s", selectedMac)
     }
 
     cMac := C.CString(selectedMac)
-    cKey := C.CString("CollocatedAgentID")
+    cKey := C.CString("ControllerID")
     defer C.free(unsafe.Pointer(cMac))
     defer C.free(unsafe.Pointer(cKey))
 
     node := C.get_network_tree_by_key(resetTree, cKey)
     if node == nil {
-        return fmt.Errorf("CollocatedAgentID node not found in reset tree")
+        return fmt.Errorf("ControllerID node not found in reset tree")
     }
 
     buf := (*[256]byte)(unsafe.Pointer(&node.value_str[0]))
@@ -3453,7 +3585,7 @@ func updateCollocatedAgentID(resetTree *C.em_network_node_t, selectedMac string)
  * Searches the NetworkSSIDList for a matching HaulType and updates its SSID and PassPhrase fields.
  * returns: nil on successful update; otherwise an error if the list or matching HaulType is not found.
  */
-func updateNetworkSSIDList(networkSSIDTree *C.em_network_node_t, haulType, newSSID, newPass string, newAuthType string, selectedBands []string, newEnable bool) error {
+func updateNetworkSSIDList(networkSSIDTree *C.em_network_node_t, haul HaulConfig,  isWirelessProfileUpdate bool) error {
     networkKey := C.CString("NetworkSSIDList")
     defer C.free(unsafe.Pointer(networkKey))
 
@@ -3476,12 +3608,15 @@ func updateNetworkSSIDList(networkSSIDTree *C.em_network_node_t, haulType, newSS
         }
 
         haulTypeStr := C.GoString(&haulNode.child[0].value_str[0])
-        if strings.Contains(haulTypeStr, haulType) {
-            updateNodeValue(item, "SSID", newSSID)
-            updateNodeValue(item, "PassPhrase", newPass)
-            updateNodeValue(item, "AuthType", newAuthType)
-            updateNodeBool(item, "Enable", newEnable)
-            updateNodeArray(item, "Band", normalizeBandsArray(selectedBands))
+        if strings.Contains(haulTypeStr,  haul.HaulType) {
+            updateNodeValue(item, "SSID",  haul.SSID)
+            updateNodeValue(item, "PassPhrase", haul.PassPhrase)
+            if (isWirelessProfileUpdate) {
+                updateNodeValue(item, "AuthType", haul.SecurityType)
+                updateNodeBool(item, "Enable", haul.Enabled)
+                updateNodeInt(item, "VLANID", haul.VlanID)
+                updateNodeArray(item, "Band", normalizeBandsArray(haul.Bands))
+            }
         }
     }
     return nil
@@ -3562,6 +3697,22 @@ func updateNodeBool(parent *C.em_network_node_t, key string, enabled bool) {
 	} else {
 		C.set_node_type(node, C.em_network_node_data_type_false)
 	}
+}
+
+/* func: updateNodeInt()
+ * Description: helper function to set the updated node value for int
+ * Return: NA
+ */
+func updateNodeInt(parent *C.em_network_node_t, key string, val int) {
+    cKey := C.CString(key)
+    defer C.free(unsafe.Pointer(cKey))
+
+    node := C.get_network_tree_by_key(parent, cKey)
+    if node == nil {
+        log.Printf("Key '%s' not found in tree", key)
+        return
+    }
+    node.value_int = C.uint(val)
 }
 
 /* func: updateNodeArray()
@@ -4118,6 +4269,405 @@ func validatePassPhrase(pass string) error {
     return nil
 }
 
+/* func: getPolicyConfiguration()
+ * Description: it extracts WiFi policy configurations from the given tree.
+ * Returns: Array of wifiPolicyConfig
+ */
+func getPolicyConfiguration(deviceListTree *C.em_network_node_t) []wifiPolicyConfig {
+    var policyConfigs []wifiPolicyConfig
+
+    // iterate through all the available device list
+    for i := 0; i < int(deviceListTree.num_children); i++ {
+        deviceNode := deviceListTree.child[i]
+
+        // Policy node
+        cPolicy := C.CString("Policy")
+        defer C.free(unsafe.Pointer(cPolicy))
+        policyNode := C.get_network_tree_by_key(deviceNode, cPolicy)
+        if(policyNode == nil) {
+            return policyConfigs;
+        }
+
+        // AP Metrics Reporting Policy
+        cAPMetrics := C.CString("AP Metrics Reporting Policy")
+        defer C.free(unsafe.Pointer(cAPMetrics))
+        apMetric := C.get_network_tree_by_key(policyNode, cAPMetrics)
+        if(apMetric == nil) {
+            return policyConfigs;
+        }
+
+        apMetricRep := APMetricReporting{
+            Interval:            getKeyIntValue(apMetric, "Interval"),
+            ManagedClientMarker: getTreeValue(apMetric, "Managed Client Marker"),
+        }
+
+        // Local Steering Disallowed Policy
+        var localDisallowedMACs []string
+        cLocalSteering := C.CString("Local Steering Disallowed Policy")
+        defer C.free(unsafe.Pointer(cLocalSteering))
+        localSteeringNode := C.get_network_tree_by_key(policyNode, cLocalSteering)
+        if localSteeringNode != nil {
+            cDisallowed := C.CString("Disallowed STA")
+            defer C.free(unsafe.Pointer(cDisallowed))
+            disallowedNode := C.get_network_tree_by_key(localSteeringNode, cDisallowed)
+            localDisallowedMACs = parseDisallowedSTAMACs(disallowedNode)
+        }
+
+        // BTM Steering Disallowed Policy
+        var btmDisallowedMACs []string
+        cBTMSteering := C.CString("BTM Steering Disallowed Policy")
+        defer C.free(unsafe.Pointer(cBTMSteering))
+        btmSteeringNode := C.get_network_tree_by_key(policyNode, cBTMSteering)
+        if btmSteeringNode != nil {
+            cDisallowed := C.CString("Disallowed STA")
+            defer C.free(unsafe.Pointer(cDisallowed))
+            disallowedNode := C.get_network_tree_by_key(btmSteeringNode, cDisallowed)
+            btmDisallowedMACs = parseDisallowedSTAMACs(disallowedNode)
+        }
+
+        // Channel Scan Reporting Policy
+        cChannelScan := C.CString("Channel Scan Reporting Policy")
+        defer C.free(unsafe.Pointer(cChannelScan))
+        channelScanReportingNode := C.get_network_tree_by_key(policyNode, cChannelScan)
+        if(channelScanReportingNode == nil) {
+            return policyConfigs;
+        }
+
+        // Default 802.1Q Settings Policy
+        cdot1qSetting := C.CString("Default 802.1Q Settings Policy")
+        defer C.free(unsafe.Pointer(cdot1qSetting))
+        dot1qSettingNode := C.get_network_tree_by_key(policyNode, cdot1qSetting)
+        if(dot1qSettingNode == nil) {
+            return policyConfigs;
+        }
+        dot1qSetting := Default802_1Q_Settings{
+            PrimaryVLANID: getKeyIntValue(dot1qSettingNode, "Primary VLAN ID"),
+            DefaultPCP:    getKeyIntValue(dot1qSettingNode, "Default PCP"),
+        }
+
+        // Radio Specific Metrics Policy
+        var radioMetricsArr []RadioSpecificMetrics
+        cRadioMetric := C.CString("Radio Specific Metrics Policy")
+        defer C.free(unsafe.Pointer(cRadioMetric))
+        cRadioMetricNode := C.get_network_tree_by_key(policyNode, cRadioMetric)
+        if (cRadioMetricNode != nil) {
+            for j:=0; j <int(cRadioMetricNode.num_children); j++ {
+                radioMetricChild := cRadioMetricNode.child[j]
+                rm := RadioSpecificMetrics{
+                    ID                     : getTreeValue(radioMetricChild, "ID"),
+                    STARCPIThreshold       : getKeyIntValue(radioMetricChild, "STA RCPI Threshold"),
+                    STARCPIHysteresis      : getKeyIntValue(radioMetricChild, "STA RCPI Hysteresis"),
+                    APUtilizationThreshold : getKeyIntValue(radioMetricChild, "AP Utilization Thresold"),
+                    STATrafficStats        : getKeyIntValue(radioMetricChild, "STA Traffic Stats"),
+                    STALinkMetrics         : getKeyIntValue(radioMetricChild, "STA Link Metrics"),
+                    STAStatus              : getKeyIntValue(radioMetricChild, "STA Status"),
+                }
+                radioMetricsArr = append(radioMetricsArr, rm)
+            }
+        }
+
+        // Radio Steering Parameters
+        var radioSteeringArr []RadioSteeringParameters
+        cRadioSteering := C.CString("Radio Steering Parameters")
+        defer C.free(unsafe.Pointer(cRadioSteering))
+        radioSteeringNode := C.get_network_tree_by_key(policyNode, cRadioSteering)
+        if (radioSteeringNode != nil) {
+            for j:=0; j <int(radioSteeringNode.num_children); j++ {
+                radioSteeringChild := radioSteeringNode.child[j]
+                rs := RadioSteeringParameters{
+                    ID                   : getTreeValue(radioSteeringChild, "ID"),
+                    SteeringPolicy       : getKeyIntValue(radioSteeringChild, "Steering Policy"),
+                    UtilizationThreshold : getKeyIntValue(radioSteeringChild, "Utilization Threshold"),
+                    RCPIThreshold        : getKeyIntValue(radioSteeringChild, "RCPI Threshold"),
+                }
+                radioSteeringArr = append(radioSteeringArr, rs)
+            }
+        }
+
+        config := wifiPolicyConfig{
+            ID: getTreeValue(deviceNode, "ID"),
+            APMetricReportingPolicy: apMetricRep,
+            LocalSteeringDisallowed: localDisallowedMACs,
+            BTMSteeringDisallowed: btmDisallowedMACs,
+            ReportIndependentChannelScans: getKeyIntValue(channelScanReportingNode, "Report Independent Channel Scans"),
+            Default802_1Q_SettingsPolicy: dot1qSetting,
+            RadioSpecificMetricsPolicy: radioMetricsArr,
+            RadioSteeringParametersPolicy: radioSteeringArr,
+        }
+        policyConfigs = append(policyConfigs, config)
+    }
+
+    return policyConfigs
+}
+
+/* func: updatePolicySettings()
+ * Description:
+ * this function update the policy settings as per configured value from GUI
+ *
+ * Returns error for failure or nil for success.
+ */
+func updatePolicySettings(deviceListTree *C.em_network_node_t, policyConfig wifiPolicyConfig) error {
+    for i := 0; i < int(deviceListTree.num_children); i++ {
+        deviceNode := deviceListTree.child[i]
+
+        // find the matching device node to update the policy settings
+        if(getTreeValue(deviceNode, "ID") != policyConfig.ID) {
+            continue
+        }
+
+        // Policy node
+        cPolicy := C.CString("Policy")
+        defer C.free(unsafe.Pointer(cPolicy))
+        policyNode := C.get_network_tree_by_key(deviceNode, cPolicy)
+        if(policyNode == nil) {
+            return fmt.Errorf("policy node not found for device\n", )
+        }
+
+        // AP Metrics Reporting Policy
+        cAPMetrics := C.CString("AP Metrics Reporting Policy")
+        defer C.free(unsafe.Pointer(cAPMetrics))
+        apMetric := C.get_network_tree_by_key(policyNode, cAPMetrics)
+        if(apMetric != nil) {
+            updateNodeInt(apMetric, "Interval", policyConfig.APMetricReportingPolicy.Interval)
+            updateNodeValue(apMetric, "Managed Client Marker", policyConfig.APMetricReportingPolicy.ManagedClientMarker)
+        }
+
+        // Local Steering Disallowed Policy
+        cLocalSteering := C.CString("Local Steering Disallowed Policy")
+        defer C.free(unsafe.Pointer(cLocalSteering))
+        localSteeringNode := C.get_network_tree_by_key(policyNode, cLocalSteering)
+        if localSteeringNode != nil {
+            updateDisallowedSTAStruct(localSteeringNode, "Disallowed STA", policyConfig.LocalSteeringDisallowed)
+        }
+
+        // BTM Steering Disallowed Policy
+        cBTMSteering := C.CString("BTM Steering Disallowed Policy")
+        defer C.free(unsafe.Pointer(cBTMSteering))
+        btmSteeringNode := C.get_network_tree_by_key(policyNode, cBTMSteering)
+        if btmSteeringNode != nil {
+            updateDisallowedSTAStruct(btmSteeringNode, "Disallowed STA", policyConfig.BTMSteeringDisallowed)
+        }
+
+        // Channel Scan Reporting Policy
+        cChannelScan := C.CString("Channel Scan Reporting Policy")
+        defer C.free(unsafe.Pointer(cChannelScan))
+        channelScanReportingNode := C.get_network_tree_by_key(policyNode, cChannelScan)
+        if(channelScanReportingNode != nil) {
+            updateNodeInt(channelScanReportingNode, "Report Independent Channel Scans", policyConfig.ReportIndependentChannelScans)
+        }
+
+        // Default 802.1Q Settings Policy
+        cdot1qSetting := C.CString("Default 802.1Q Settings Policy")
+        defer C.free(unsafe.Pointer(cdot1qSetting))
+        dot1qSettingNode := C.get_network_tree_by_key(policyNode, cdot1qSetting)
+        if (dot1qSettingNode != nil) {
+            updateNodeInt(dot1qSettingNode, "Primary VLAN ID", policyConfig.Default802_1Q_SettingsPolicy.PrimaryVLANID)
+            updateNodeInt(dot1qSettingNode, "Default PCP", policyConfig.Default802_1Q_SettingsPolicy.DefaultPCP)
+        }
+
+        // Radio Specific Metrics Policy
+        cRadioMetric := C.CString("Radio Specific Metrics Policy")
+        defer C.free(unsafe.Pointer(cRadioMetric))
+        radioMetricNode := C.get_network_tree_by_key(policyNode, cRadioMetric)
+        if radioMetricNode != nil && len(policyConfig.RadioSpecificMetricsPolicy) > 0 {
+            updateRadioSpecificMetricPolicy(radioMetricNode, policyConfig.RadioSpecificMetricsPolicy)
+        }
+
+        // Radio Steering Parameters
+        cRadioSteering := C.CString("Radio Steering Parameters")
+        defer C.free(unsafe.Pointer(cRadioSteering))
+        radioSteeringNode := C.get_network_tree_by_key(policyNode, cRadioSteering)
+        if radioSteeringNode != nil && len(policyConfig.RadioSteeringParametersPolicy) > 0 {
+            updateRadioSteeringPolicy(radioSteeringNode, policyConfig.RadioSteeringParametersPolicy)
+        }
+    }
+    return nil
+}
+
+/* func: updateDisallowedSTAStruct()
+ * Description:
+ * this function update disallowed mac list for the policy
+ *
+ * Returns NA
+ */
+func updateDisallowedSTAStruct(parent *C.em_network_node_t, key string, macs []string) {
+    cKey := C.CString(key)
+    defer C.free(unsafe.Pointer(cKey))
+
+    node := C.get_network_tree_by_key(parent, cKey)
+    if node == nil {
+        log.Printf("Key '%s' not found in tree", key)
+        return
+    }
+
+    if len(macs) == 0 {
+        macs = []string{"00:00:00:00:00:00"}
+    }
+
+    current := reconcileChildrenToCount(node, len(macs))
+
+    if current == 0 {
+        log.Printf("Disallowed STA node is empty, returning...!\n")
+        return;
+    }
+
+    for i, m := range macs {
+        childNode := node.child[i]
+        s := strings.TrimSpace(strings.ToLower(m))
+        if s == "" {
+            continue
+        }
+        log.Printf("MAC Address %s to be added for Disallowed STA node\n", s)
+        updateNodeValue(childNode, "MAC", s)
+    }
+}
+
+/* func: updateRadioSpecificMetricPolicy()
+ * Description:
+ * this function update the configured value for Radio specific metric policy
+ *
+ * Returns NA
+ */
+func updateRadioSpecificMetricPolicy(parent *C.em_network_node_t, entries []RadioSpecificMetrics) {
+    if parent == nil || len(entries) == 0 {
+        return
+    }
+
+    reconcileChildrenToCount(parent, len(entries))
+
+    for i, e := range entries {
+        childNode := parent.child[i]
+        if childNode == nil {
+            log.Printf("nil child at index=%d; skipping update", i)
+            continue
+        }
+
+        updateNodeValue(childNode, "ID", e.ID)
+        updateNodeInt(childNode, "STA RCPI Threshold", e.STARCPIThreshold)
+        updateNodeInt(childNode, "STA RCPI Hysteresis", e.STARCPIHysteresis)
+        updateNodeInt(childNode, "AP Utilization Thresold", e.APUtilizationThreshold)
+        updateNodeInt(childNode, "STA Traffic Stats", e.STATrafficStats)
+        updateNodeInt(childNode, "STA Link Metrics", e.STALinkMetrics)
+        updateNodeInt(childNode, "STA Status", e.STAStatus)
+    }
+}
+
+/* func: updateRadioSteeringPolicy()
+ * Description:
+ * this function update the configured value for Radio steering policy
+ *
+ * Returns NA
+ */
+func updateRadioSteeringPolicy(parent *C.em_network_node_t, entries []RadioSteeringParameters) {
+    if parent == nil || len(entries) == 0 {
+        return
+    }
+
+   reconcileChildrenToCount(parent, len(entries))
+
+    for i, e := range entries {
+        childNode := parent.child[i]
+        if childNode == nil {
+            log.Printf("nil child at index=%d; skipping update", i)
+            continue
+        }
+
+        updateNodeValue(childNode, "ID", e.ID)
+        updateNodeInt(childNode, "Steering Policy", e.SteeringPolicy)
+        updateNodeInt(childNode, "Utilization Threshold", e.UtilizationThreshold)
+        updateNodeInt(childNode, "RCPI Threshold", e.RCPIThreshold)
+    }
+}
+
+/* func: reconcileChildrenToCount()
+ * Description:
+ * this function ensures parent has exactly newChildCount children.
+ * It clones rows from a template and freed extra rows.
+ *
+ * Returns the final count.
+ */
+func reconcileChildrenToCount(parent *C.em_network_node_t, newChildCount int) int {
+    if parent == nil {
+        return 0
+    }
+
+    current := int(parent.num_children)
+
+    if current < newChildCount {
+        for i := current; i < newChildCount; i++ {
+            cloneTree := C.clone_network_tree_for_display(parent, nil, 0xffff, false)
+            if cloneTree == nil || cloneTree.num_children == 0 || cloneTree.child[0] == nil {
+                log.Printf("clone failed at i=%d; aborting grow..!", i)
+                break
+            }
+            parent.child[i] = cloneTree.child[0]
+            parent.num_children++
+        }
+        current = int(parent.num_children)
+    }
+
+    if current > newChildCount {
+        for i := current - 1; i >= newChildCount; i-- {
+            if parent.child[i] != nil {
+                C.free_network_tree(parent.child[i])
+                parent.child[i] = nil
+            }
+            parent.num_children--
+        }
+        current = int(parent.num_children)
+    }
+
+    return current
+}
+
+/* func: parseDisallowedSTAMACs()
+ * Description:
+ * Parse the Disallowed STA MAC from policy list
+ * returns: array of disallowed stat mac.
+ */
+func parseDisallowedSTAMACs(disallowedNode *C.em_network_node_t) []string {
+    macs := []string{}
+    if disallowedNode == nil {
+        return macs
+    }
+
+    count := int(disallowedNode.num_children)
+    for i := 0; i < count; i++ {
+        elem := disallowedNode.child[i]
+        if elem == nil {
+            continue
+        }
+        mac := getTreeValue(elem, "MAC")
+        if mac != "" && mac != "00:00:00:00:00:00" {
+            macs = append(macs, mac)
+        }
+    }
+    return macs
+}
+
+/* func: applyWifiPolicyConfig()
+ * Description:
+ * Executes the set pilict on the update policy list
+ * returns: true for successfully executed, otherwise false.
+ */
+func applyWifiPolicyConfig(policyTree *C.em_network_node_t) bool {
+    resultKey := C.CString("Result")
+    cmd := C.CString("set_policy OneWifiMesh")
+    defer C.free(unsafe.Pointer(resultKey))
+    defer C.free(unsafe.Pointer(cmd))
+
+    // get the node for Set policy tree
+    set_policy_node := C.get_network_tree_by_key(policyTree, resultKey)
+    if set_policy_node == nil {
+        log.Println("result node not found")
+        return false
+    }
+
+    //Execute the set_policy command with updated policies
+    C.exec(cmd, C.strlen(cmd), set_policy_node)
+    return true
+}
+
 func getControllerRemoteIP() (string, int, error) {
     var remoteIPcfg RemoteIPConfig
     data, err := os.ReadFile(remoteCtrl_Addr_path)
@@ -4280,35 +4830,179 @@ func getChannelCapabilityFromTree(tree *C.em_network_node_t) map[int][]classChan
  * channels with respect to class and band
  * returns: array of channelConfig
  */
-func getConfiguredChannels(tree *C.em_network_node_t) []channelConfig {
-    var result []channelConfig
+func getConfiguredChannels(tree *C.em_network_node_t) []WifiChannelConfig {
+    var result []WifiChannelConfig
 
     // Get the AnticipatedChannelPreference
     keyACP := C.CString("AnticipatedChannelPreference")
     defer C.free(unsafe.Pointer(keyACP))
-
-    configuredChannelPrefNode := C.get_network_tree_by_key(tree, keyACP)
+	configuredChannelPrefNode := C.get_network_tree_by_key(tree, keyACP)
     if configuredChannelPrefNode == nil {
+		log.Printf("Failed to get previous channel configuration")
+        return result
+	}
+
+    // Get the DeviceList
+    keyDeviceList := C.CString("DeviceList")
+    defer C.free(unsafe.Pointer(keyDeviceList))
+    deviceListNode := C.get_network_tree_by_key(tree, keyDeviceList)
+    if deviceListNode == nil {
         log.Printf("Failed to get previous channel configuration")
         return result
     }
 
-    // Get the list of configured class with respect to class and band
-    for i := 0; i < int(configuredChannelPrefNode.num_children); i++ {
-        configuredChannel := configuredChannelPrefNode.child[i]
-        ConfigClass := getKeyIntValue(configuredChannel, "Class")
-        configChannelList := C.get_network_tree_by_key(configuredChannel, C.CString("ChannelList"))
-
-        var configChannels []int
-        if configChannelList != nil {
-            for j := 0; j < int(configChannelList.num_children); j++ {
-                configChannels = append(configChannels, int(configChannelList.child[j].value_int))
+    // ---------- Build GLOBAL entry ----------
+    {
+        var globalCfgs []channelConfig
+        // Iterate through the global AnticipatedChannelPreference
+        for idx := 0; idx < int(configuredChannelPrefNode.num_children); idx++ {
+            var bandIndex int
+            cfgNode := configuredChannelPrefNode.child[idx]
+            if cfgNode == nil {
+               continue
             }
+
+            if idx == 2 {
+                // bandIndex of 6Ghz is 3
+                bandIndex = idx + 1
+            } else {
+                bandIndex = idx
+            }
+
+            // Read Class
+            ConfigClass := getKeyIntValue(cfgNode, "Class")
+
+            // Read ChannelList
+            chListKey := C.CString("ChannelList")
+            chListNode := C.get_network_tree_by_key(cfgNode, chListKey)
+            C.free(unsafe.Pointer(chListKey))
+
+            var configChannels []int
+            if chListNode != nil {
+                for k := 0; k < int(chListNode.num_children); k++ {
+                    configChannels = append(configChannels, int(chListNode.child[k].value_int))
+                }
+            }
+
+            // Read ChannelPrefList
+            prefListKey := C.CString("ChannelPrefList")
+            prefListNode := C.get_network_tree_by_key(cfgNode, prefListKey)
+            C.free(unsafe.Pointer(prefListKey))
+
+            var configChannelsPref []int
+            if prefListNode != nil {
+                for k := 0; k < int(prefListNode.num_children); k++ {
+                    configChannelsPref = append(configChannelsPref, int(prefListNode.child[k].value_int))
+                }
+            }
+
+            // RadioID left empty for global.
+            globalCfgs = append(globalCfgs, channelConfig{
+                RadioID:     "",
+                RadioIndex:  bandIndex,
+                Class:       ConfigClass,
+                Channels:    configChannels,
+                Preferences: configChannelsPref,
+            })
         }
-        result = append(result, channelConfig{
-            RadioIndex: i,
-            Class:      ConfigClass,
-            Channels:   configChannels,
+
+        result = append(result, WifiChannelConfig{
+            DeviceID:       "FF:FF:FF:FF:FF:FF", // GLOBAL sentinel
+            SupportedClass: nil,                 // can be filled from capability later
+            SelectedConfig: globalCfgs,
+        })
+    }
+
+    // ---------- Build per-device entries ----------
+    for i := 0; i < int(deviceListNode.num_children); i++ {
+        deviceNode := deviceListNode.child[i]
+        if deviceNode == nil {
+            continue
+        }
+
+        deviceID := getTreeValue(deviceNode, "ID")
+
+        keyRadioList := C.CString("RadioList")
+        defer C.free(unsafe.Pointer(keyRadioList))
+        RadioListNode := C.get_network_tree_by_key(deviceNode, keyRadioList)
+        if RadioListNode == nil || int(RadioListNode.num_children) == 0 {
+            log.Printf("Radio List is empty for device %s. moving to next device\n", deviceID)
+            continue
+        }
+
+        // Build per-device selected configs
+        var cfgs []channelConfig
+        for j := 0; j < int(RadioListNode.num_children); j++ {
+            radioNode := RadioListNode.child[j]
+            if radioNode == nil {
+                continue
+            }
+
+            radioID := getTreeValue(radioNode, "ID")
+            bandIndex := getKeyIntValue(radioNode, "Band")
+
+            // Keep empty config item to reflect that radio exists
+            cfgs = append(cfgs, channelConfig{
+                RadioID:     radioID,
+                RadioIndex:  bandIndex,
+                Class:       0,
+                Channels:    nil,
+                Preferences: nil,
+            })
+
+            //configuredChannel := configuredChannelPrefNode.child[anticipatedChannelIndex]
+            radioChannelNode := C.get_network_tree_by_key(radioNode, keyACP)
+            if radioChannelNode == nil {
+                continue
+            }
+
+            for idx := 0; idx < int(radioChannelNode.num_children); idx++ {
+                cfgNode := radioChannelNode.child[idx]
+                if cfgNode == nil {
+                    continue
+                }
+
+                // Read Class
+                ConfigClass := getKeyIntValue(cfgNode, "Class")
+
+                // Read ChannelList
+                chListKey := C.CString("ChannelList")
+                chListNode := C.get_network_tree_by_key(cfgNode, chListKey)
+                C.free(unsafe.Pointer(chListKey))
+
+                var configChannels []int
+                if chListNode != nil {
+                    for k := 0; k < int(chListNode.num_children); k++ {
+                        configChannels = append(configChannels, int(chListNode.child[k].value_int))
+                    }
+                }
+
+                // Read ChannelPrefList
+                prefListKey := C.CString("ChannelPrefList")
+                prefListNode := C.get_network_tree_by_key(cfgNode, prefListKey)
+                C.free(unsafe.Pointer(prefListKey))
+
+                var configChannelsPref []int
+                if prefListNode != nil {
+                    for k := 0; k < int(prefListNode.num_children); k++ {
+                        configChannelsPref = append(configChannelsPref, int(prefListNode.child[k].value_int))
+                    }
+                }
+
+            cfgs  = append(cfgs , channelConfig{
+                RadioID: radioID,
+                RadioIndex: bandIndex,
+                Class:      ConfigClass,
+                Channels:   configChannels,
+                Preferences: configChannelsPref,
+            })
+        }
+    }
+
+        result = append(result, WifiChannelConfig{
+            DeviceID:       deviceID,
+            SupportedClass: nil, //will be filled from channel capbility later
+            SelectedConfig: cfgs,
         })
     }
 
@@ -4329,25 +5023,120 @@ func updateAnticipatedChannelPreference(tree *C.em_network_node_t, updatedChanne
         return fmt.Errorf("updateAnticipatedChannelPreference: updated channel array is nil")
     }
 
-    channelPrefTree_cmd := C.CString("AnticipatedChannelPreference")
-    classNode_cmd := C.CString("Class")
-    defer C.free(unsafe.Pointer(channelPrefTree_cmd))
-    defer C.free(unsafe.Pointer(classNode_cmd))
-    channelPrefTree := C.get_network_tree_by_key(tree, channelPrefTree_cmd)
+    // --------- C keys ----------
+    keyACP              := C.CString("AnticipatedChannelPreference")
+    keyClass            := C.CString("Class")
+    keyChannelList      := C.CString("ChannelList")
+    keyChannelPrefList  := C.CString("ChannelPrefList")
+    keyDeviceList       := C.CString("DeviceList")
+    keyRadioList        := C.CString("RadioList")
+
+    // Free at the end of the function
+    defer func() {
+        C.free(unsafe.Pointer(keyACP))
+        C.free(unsafe.Pointer(keyClass))
+        C.free(unsafe.Pointer(keyChannelList))
+        C.free(unsafe.Pointer(keyChannelPrefList))
+        C.free(unsafe.Pointer(keyDeviceList))
+        C.free(unsafe.Pointer(keyRadioList))
+    }()
+
+    channelPrefTree := C.get_network_tree_by_key(tree, keyACP)
     if channelPrefTree == nil {
         return fmt.Errorf("updateAnticipatedChannelPreference: missing 'AnticipatedChannelPreference' node")
     }
 
     for _, cfg := range updatedChannelArray {
-        channelPrefNode := channelPrefTree.child[cfg.RadioIndex]
-        classNode := C.get_network_tree_by_key(channelPrefNode, classNode_cmd)
-        if classNode != nil {
-            classNode.value_int = C.uint(cfg.Class)
+        if IsAllFF(cfg.DeviceID) {
+            // update global config
+            channelPrefNode := channelPrefTree.child[cfg.RadioIndex]
+            classNode := C.get_network_tree_by_key(channelPrefNode, keyClass)
+            if classNode != nil {
+                classNode.value_int = C.uint(cfg.Class)
+            }
+            channelListNode := C.get_network_tree_by_key(channelPrefNode, keyChannelList)
+            C.set_node_type(channelListNode, C.em_network_node_data_type_array_num)
+            channelListNode.num_children = 0
+            C.set_node_array_value(channelListNode, C.CString(mapchannelsToSlice(cfg.Channels)))
+
+            //update channel preference list
+            channelPrefListNode := C.get_network_tree_by_key(channelPrefNode, keyChannelPrefList)
+            if channelPrefListNode != nil {
+               C.set_node_type(channelPrefListNode, C.em_network_node_data_type_array_num)
+               channelPrefListNode.num_children = 0
+               C.set_node_array_value(channelPrefListNode, C.CString(mapchannelsToSlice(cfg.Preferences)))
+           }
+        } else {
+            // update for specific radio
+            isRadioIdFound := false
+            deviceListNode := C.get_network_tree_by_key(tree, keyDeviceList)
+            if deviceListNode == nil {
+                return fmt.Errorf("updateAnticipatedChannelPreference: Failed to get the device list\n")
+            }
+
+            for i := 0; i < int(deviceListNode.num_children); i++ {
+                deviceNode := deviceListNode.child[i]
+                if deviceNode == nil {
+                    return fmt.Errorf("updateAnticipatedChannelPreference: Failed to parse device list\n")
+                }
+
+                deviceID := getTreeValue(deviceNode, "ID")
+
+                if deviceID == cfg.DeviceID {
+                    RadioListNode := C.get_network_tree_by_key(deviceNode, keyRadioList)
+                    if RadioListNode == nil || int(RadioListNode.num_children) == 0 {
+                        log.Printf("Radio List is empty for device %s\n", deviceID)
+                        return fmt.Errorf("updateAnticipatedChannelPreference: Failed to parse Radio list\n")
+                    }
+                    for j := 0; j < int(RadioListNode.num_children); j++ {
+                        radioNode := RadioListNode.child[j]
+                        if radioNode == nil {
+                            return fmt.Errorf("updateAnticipatedChannelPreference: Failed to parse Radio ID\n")
+                        }
+                        radioID := getTreeValue(radioNode, "ID")
+                        if radioID == cfg.RadioID {
+                            isRadioIdFound = true
+                            log.Printf("Updating the channel config for RUID %s\n", cfg.RadioID)
+                            radioChannelNode := C.get_network_tree_by_key(radioNode, keyACP)
+                            if radioChannelNode == nil {
+                                return fmt.Errorf("updateAnticipatedChannelPreference: Failed to parse updateAnticipatedChannelPreference for Radio ID %s\n", cfg.RadioID)
+                            }
+                            if (radioChannelNode.num_children < 1) {
+                                cloneTree := C.clone_network_tree_for_display(channelPrefTree, nil, 0xffff, false)
+                                if cloneTree == nil || cloneTree.num_children == 0 || cloneTree.child[0] == nil {
+                                    log.Printf("clone failed at i=%d; aborting grow..!", i)
+                                    return fmt.Errorf("updateAnticipatedChannelPreference: clone failed for Radio ID %s\n", cfg.RadioID)
+                                }
+                                radioChannelNode.child[0] = cloneTree.child[cfg.RadioIndex]
+                                radioChannelNode.num_children = 1
+							}
+							channelPrefNode := radioChannelNode.child[0]
+							classNode := C.get_network_tree_by_key(channelPrefNode, keyClass)
+							if classNode != nil {
+							    classNode.value_int = C.uint(cfg.Class)
+                            }
+                            channelListNode := C.get_network_tree_by_key(channelPrefNode, keyChannelList)
+                            C.set_node_type(channelListNode, C.em_network_node_data_type_array_num)
+                            channelListNode.num_children = 0
+                            C.set_node_array_value(channelListNode, C.CString(mapchannelsToSlice(cfg.Channels)))
+
+                            //update channel preference list
+                            channelPrefListNode := C.get_network_tree_by_key(channelPrefNode, keyChannelPrefList)
+                            if channelPrefListNode != nil {
+                                C.set_node_type(channelPrefListNode, C.em_network_node_data_type_array_num)
+                                channelPrefListNode.num_children = 0
+                                C.set_node_array_value(channelPrefListNode, C.CString(mapchannelsToSlice(cfg.Preferences)))
+                            }
+                            break
+                        }
+                    }
+                }
+                if isRadioIdFound == true {
+                    //Radio id is found hence breaking the loop for devic id.
+                    break
+                }
+            }
         }
-        channelListNode := C.get_network_tree_by_key(channelPrefNode, C.CString("ChannelList"))
-        C.set_node_type(channelListNode, C.em_network_node_data_type_array_num)
-        channelListNode.num_children = 0
-        C.set_node_array_value(channelListNode, C.CString(mapchannelsToSlice(cfg.Channels)))
     }
     return nil
 }
@@ -4375,19 +5164,19 @@ func applyChannelConfig(ssidTree *C.em_network_node_t) bool {
     return true
 }
 
-/* func: findPrevSelection()
+/* func: filterDeviceSelectionByBand()
  * Description:
  * get the previously selected channel config
  * returns: array of selected channels with respect to class.
  */
-func findPrevSelection(prevList []channelConfig, band int) (channelConfig, bool) {
-    for _, cfg := range prevList {
+func filterDeviceSelectionByBand(dev WifiChannelConfig, band int) []channelConfig {
+    out := make([]channelConfig, 0, len(dev.SelectedConfig))
+    for _, cfg := range dev.SelectedConfig {
         if cfg.RadioIndex == band {
-            return cfg, true
+            out = append(out, cfg)
         }
     }
-    var empty channelConfig
-    return empty, false
+    return out
 }
 
 /* func: mapchannelsToSlice()
@@ -4406,6 +5195,23 @@ func mapchannelsToSlice(channels []int) string {
     return "[" + strings.Join(strKeys, ", ") + "]"
 }
 
+/* func: IsAllFF()
+ * Description:
+ * check if mac address is FF:FF:FF:FF:FF:FF
+ * returns: true if mac is all ff else flase
+ */
+func IsAllFF(mac string) bool {
+    hex := nonHex.ReplaceAllString(strings.TrimSpace(mac), "")
+    if len(hex) != 10 && len(hex) != 12 {
+        return false
+    }
+    for _, ch := range hex {
+        if ch != 'F' && ch != 'f' {
+            return false
+        }
+    }
+    return true
+}
 /* func: dumpNetNode()
  * Description:
  * Print the tree for debug purpose

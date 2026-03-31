@@ -55,19 +55,19 @@ public:
 	 *
 	 * This function initializes and returns a data model object for the specified
 	 * network identifier and interface, with the given profile type. Optionally,
-	 * the data model can be marked as colocated.
+	 * the data model can be marked as that of controller.
 	 *
 	 * @param[in] net_id The network identifier for which the data model is created.
 	 * @param[in] al_intf Pointer to the interface structure used for the data model.
 	 * @param[in] profile The profile type to be used for the data model.
-	 * @param[in] colocated_dm Optional parameter to specify if the data model is colocated.
+	 * @param[in] controller Optional parameter to specify if the data model is of controller.
 	 *
 	 * @returns Pointer to the created data model object.
 	 * @retval NULL if the creation fails.
 	 *
 	 * @note Ensure that the network identifier and interface are valid before calling this function.
 	 */
-	dm_easy_mesh_t *create_data_model(const char *net_id, const em_interface_t *al_intf, em_profile_type_t profile, bool colocated_dm = false);
+	dm_easy_mesh_t *create_data_model(const char *net_id, const em_interface_t *al_intf, em_profile_type_t profile, bool controller = false);
     
 	/**!
 	 * @brief Deletes a data model associated with a given network ID and AL MAC address.
@@ -394,6 +394,8 @@ public:
 	 * @note Ensure that the input BSS is valid and part of a list before calling this function.
 	 */
 	dm_bss_t *get_next_bss(dm_bss_t *bss);
+	dm_bss_t *get_first_bss(mac_addr_t al_mac);
+	dm_bss_t *get_next_bss(mac_addr_t al_mac, dm_bss_t *bss);
     
 	/**!
 	 * @brief Retrieves the BSS (Basic Service Set) associated with the given key.

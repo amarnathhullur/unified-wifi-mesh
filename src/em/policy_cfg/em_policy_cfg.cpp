@@ -41,6 +41,8 @@
 #include "em_msg.h"
 #include "em_cmd_exec.h"
 
+static const unsigned char em_vendor_oui[EM_VENDOR_OUI_SIZE] = {0xd8, 0x9c, 0x8e};
+
 short em_policy_cfg_t::create_metrics_rep_policy_tlv(unsigned char *buff)
 {
 	short len = 0;
@@ -59,6 +61,19 @@ short em_policy_cfg_t::create_metrics_rep_policy_tlv(unsigned char *buff)
         dm = get_current_cmd()->get_data_model();
 	}
 
+    /*Validate policy count */
+    unsigned int num_policies = dm->get_num_policy();
+    if ((num_policies == 0) || (num_policies > EM_MAX_POLICIES)) {
+        em_printfout("Invalid policy count %u\n", num_policies);
+        return 0;
+    }
+
+    /* Validate bounds for broadcast radio fill */
+    if (get_data_model()->get_num_radios() > EM_MAX_RADIO_PER_AGENT) {
+        em_printfout("Radio count %u exceeds maximum %u\n", get_data_model()->get_num_radios(), EM_MAX_RADIO_PER_AGENT);
+        return 0;
+    }
+
 	metric = reinterpret_cast<em_metric_rprt_policy_t *> (tmp);
 	for (i = 0; i < dm->get_num_policy(); i++) {
         policy = &dm->m_policy[i];
@@ -75,38 +90,61 @@ short em_policy_cfg_t::create_metrics_rep_policy_tlv(unsigned char *buff)
 	found_match = false;
 	metric->interval = static_cast<unsigned char> (policy->m_policy.interval);
 
+    unsigned int radio_cnt = 0;
+
 	for (i = 0; i < dm->get_num_policy(); i++) {
 		policy = &dm->m_policy[i];
 		if (policy->m_policy.id.type == em_policy_id_type_radio_metrics_rep) {
-			if ((memcmp(policy->m_policy.id.radio_mac, broadcast_mac, sizeof(mac_address_t)) == 0) ||
-					(memcmp(policy->m_policy.id.radio_mac, get_radio_interface_mac(), sizeof(mac_address_t)) == 0)) {
+			if ((memcmp(policy->m_policy.id.radio_mac, broadcast_mac, sizeof(mac_address_t)) == 0)) {
 				found_match = true;
+                //if broadcast, fill all radios
+                em_printfout("  Fill broadcast mac: %s", util::mac_to_string(get_data_model()->get_radio_info(radio_cnt)->id.ruid).c_str());
+                radio_cnt = get_data_model()->get_num_radios();
             	break;	
-			}
+			} else {
+                radio_metric = &metric->radios[radio_cnt];
+                memcpy(radio_metric->ruid, policy->m_policy.id.radio_mac, sizeof(mac_address_t));
+                em_printfout("Radio %d MAC: %s for type %d", radio_cnt, util::mac_to_string(policy->m_policy.id.radio_mac).c_str(), policy->m_policy.id.type);
+
+                radio_metric->rcpi_thres = static_cast<unsigned char> (policy->m_policy.rcpi_threshold);
+                radio_metric->rcpi_hysteresis = static_cast<unsigned char> (policy->m_policy.rcpi_hysteresis);
+                radio_metric->util_thres = static_cast<unsigned char> (policy->m_policy.util_threshold);
+                radio_metric->sta_policy = 0;
+                if (policy->m_policy.sta_traffic_stats == true) {
+                    radio_metric->sta_policy |= (1 << 7);
+                }
+                if (policy->m_policy.sta_link_metric == true) {
+                    radio_metric->sta_policy |= (1 << 6);
+                }
+                if (policy->m_policy.sta_status == true) {
+                    radio_metric->sta_policy |= (1 << 5);
+                }
+                radio_cnt++;
+            }
 		}
 	}
+	em_printfout(" NUM of radios: %d", radio_cnt);
+    metric->radios_num = radio_cnt;
 
-	
-	if (found_match == false) {
-		return 0;
-	}
-
-	metric->radios_num = 1;
-	radio_metric = &metric->radios[0];
-
-	memcpy(radio_metric->ruid, get_radio_interface_mac(), sizeof(mac_address_t));
-	radio_metric->rcpi_thres = static_cast<unsigned char> (policy->m_policy.rcpi_threshold);
-	radio_metric->rcpi_hysteresis = static_cast<unsigned char> (policy->m_policy.rcpi_hysteresis);
-	radio_metric->util_thres = static_cast<unsigned char> (policy->m_policy.util_threshold);
-	radio_metric->sta_policy = 0;
-	if (policy->m_policy.sta_traffic_stats == true) {
-		radio_metric->sta_policy |= (1 << 7);	
-	}
-	if (policy->m_policy.sta_link_metric == true) {
-		radio_metric->sta_policy |= (1 << 6);	
-	}
-	if (policy->m_policy.sta_status == true) {
-		radio_metric->sta_policy |= (1 << 5);	
+    if (found_match == true) {
+        for(i = 0; i < get_data_model()->get_num_radios(); i++) {
+            radio_metric = &metric->radios[i];
+            em_printfout(" Radio %d MAC: %s", i, util::mac_to_string(get_data_model()->get_radio_info(i)->id.ruid).c_str());
+            memcpy(radio_metric->ruid, get_data_model()->get_radio_info(i)->id.ruid, sizeof(mac_address_t));
+            radio_metric->rcpi_thres = static_cast<unsigned char> (policy->m_policy.rcpi_threshold);
+            radio_metric->rcpi_hysteresis = static_cast<unsigned char> (policy->m_policy.rcpi_hysteresis);
+            radio_metric->util_thres = static_cast<unsigned char> (policy->m_policy.util_threshold);
+            radio_metric->sta_policy = 0;
+            if (policy->m_policy.sta_traffic_stats == true) {
+                radio_metric->sta_policy |= (1 << 7);
+            }
+            if (policy->m_policy.sta_link_metric == true) {
+                radio_metric->sta_policy |= (1 << 6);
+            }
+            if (policy->m_policy.sta_status == true) {
+                radio_metric->sta_policy |= (1 << 5);
+            }
+        }
 	}
 
 	tmp += 2*sizeof(unsigned char) + metric->radios_num * sizeof(em_metric_rprt_policy_radio_t);
@@ -230,40 +268,22 @@ short em_policy_cfg_t::create_def_8021q_settings_policy_tlv(unsigned char *buff)
 short em_policy_cfg_t::create_traffic_sep_policy_tlv(unsigned char *buff)
 {
     size_t len = 0;
-    dm_easy_mesh_t *dm = NULL;
-    dm_policy_t *policy;
-    bool found_match = false;
+    dm_easy_mesh_t *dm = get_data_model();
+    dm_network_ssid_t *net_ssid;
     unsigned char *tmp = buff;
     unsigned int i = 0;
 
-    if (get_current_cmd()->get_type() == em_cmd_type_em_config) {
-        dm = get_data_model();
-    } else if (get_current_cmd()->get_type() == em_cmd_type_set_policy) {
-        dm = get_current_cmd()->get_data_model();
-    }
-
-    for (i = 0; i < dm->get_num_policy(); i++) {
-        policy = &dm->m_policy[i];
-        if (policy->m_policy.id.type == em_policy_id_type_traffic_separation) {
-            found_match = true;
-            break;
-        }
-    }
-
-    if (found_match == false) {
-        em_printfout(" Found Match False ");
-        return 0;
-    }
-
-    unsigned char ssids_num = static_cast<unsigned char>(policy->m_policy.traffic_separ.num_ssids);
-    *tmp = ssids_num;
+    // get total ssid count
+    unsigned char ssids_num = dm->get_num_network_ssid();
+    *tmp = static_cast<unsigned char>(ssids_num);
     tmp += sizeof(unsigned char);
     len += sizeof(unsigned char);
 
-    for (unsigned int i = 0; i < policy->m_policy.traffic_separ.num_ssids; i++) {
-        auto &info = policy->m_policy.traffic_separ.ssid_info[i];
+    for (i = 0; i < ssids_num; i++) {
+        net_ssid = dm->get_network_ssid(i);
 
-        std::vector<unsigned char> ssid_bytes(info.ssid, info.ssid + strlen(info.ssid));
+        std::vector<unsigned char> ssid_bytes(net_ssid->m_network_ssid_info.ssid,
+                  net_ssid->m_network_ssid_info.ssid + strlen(net_ssid->m_network_ssid_info.ssid));
         unsigned char ssid_len = static_cast<unsigned char>(ssid_bytes.size());
 
         *tmp = ssid_len;
@@ -274,7 +294,7 @@ short em_policy_cfg_t::create_traffic_sep_policy_tlv(unsigned char *buff)
         tmp += ssid_len;
         len += ssid_len;
 
-        unsigned short vlan_n = htons(info.vlan_id);
+        unsigned short vlan_n = htons(net_ssid->m_network_ssid_info.vlan_id);
         memcpy(tmp, &vlan_n, sizeof(vlan_n));
         tmp += sizeof(unsigned short);
         len += sizeof(unsigned short);
@@ -315,34 +335,92 @@ short em_policy_cfg_t::create_vendor_policy_cfg_tlv(unsigned char *buff)
     size_t len = 0;
     dm_easy_mesh_t *dm;
     dm_policy_t *policy;
-    bool found_match = false;
-    unsigned char *tmp = buff;
     unsigned int i = 0;
+    int idx_ap = -1;
+    int idx_alarm = -1;
+    int idx_filter = -1;
+
+    em_vendor_specific_t *vendor_data = reinterpret_cast<em_vendor_specific_t *> (buff);
+    memcpy(reinterpret_cast<char *> (vendor_data->vendor_oui), em_vendor_oui, EM_VENDOR_OUI_SIZE);
+    len += sizeof(unsigned char) + EM_VENDOR_OUI_SIZE;
+
+    unsigned char *cursor = reinterpret_cast<unsigned char *> (vendor_data->data);
+    unsigned char *payload_start = reinterpret_cast<unsigned char *> (vendor_data->data);
+    em_vendor_data_t *data = NULL;
 
     dm = get_current_cmd()->get_data_model();
 
     for (i = 0; i < dm->get_num_policy(); i++) {
-        policy = &dm->m_policy[i];
-        if (policy->m_policy.id.type == em_policy_id_type_ap_metrics_rep) {
-            found_match = true;
+        if (dm->m_policy[i].m_policy.id.type == em_policy_id_type_ap_metrics_rep) {
+            idx_ap = static_cast<int>(i);
+        } else if (dm->m_policy[i].m_policy.id.type == em_policy_id_type_alarm_threshold) {
+            idx_alarm = static_cast<int>(i);
+        } else if (dm->m_policy[i].m_policy.id.type == em_policy_id_type_client_filters) {
+            idx_filter = static_cast<int>(i);
+        }
+        /* If both found, we can stop scanning early */
+        if ((idx_ap != -1) && (idx_alarm != -1) && (idx_filter != -1)) {
             break;
         }
     }
-    if (found_match == false) {
-        return 0;
+
+    if ((idx_ap == -1) && (idx_alarm == -1) && (idx_filter == -1)) {
+        return static_cast<short> (len);
     }
 
-    strncpy(reinterpret_cast<char *> (tmp), policy->m_policy.managed_sta_marker, strlen(policy->m_policy.managed_sta_marker) + 1);
+    /* If AP metrics policy exists, append its vendor data */
+    if (idx_ap != -1) {
+        policy = &dm->m_policy[idx_ap];
+        em_printfout(" Vendor Policy cfg TLV for metrics report policy ");
 
-    tmp += strlen(policy->m_policy.managed_sta_marker);
-    len += strlen(policy->m_policy.managed_sta_marker);
+        data = reinterpret_cast<em_vendor_data_t *> (cursor);
+        data->attr_id = vendor_ext_attr_id_policy_sta_marker;
+        strncpy(reinterpret_cast<char *> (data->vendor_data), policy->m_policy.managed_sta_marker, strlen(policy->m_policy.managed_sta_marker) + 1);
+
+        len += sizeof(data->attr_id) + strlen(policy->m_policy.managed_sta_marker) + 1;
+        cursor += sizeof(data->attr_id) + strlen(policy->m_policy.managed_sta_marker) + 1;
+
+        vendor_data->num++;
+    }
+
+    if (idx_alarm != -1) {
+        policy = &dm->m_policy[idx_alarm];
+        em_printfout(" Vendor Policy cfg TLV for link stats alarm policy ");
+
+        data = reinterpret_cast<em_vendor_data_t *> (cursor);
+        data->attr_id = vendor_ext_attr_id_policy_alarm;
+        memcpy(data->vendor_data,
+            &policy->m_policy.link_stats_alarm_cfg,
+            sizeof(em_link_stats_alarm_cfg_t));
+
+        len += sizeof(data->attr_id) + sizeof(em_link_stats_alarm_cfg_t);
+        cursor += sizeof(data->attr_id) + sizeof(em_link_stats_alarm_cfg_t);
+
+        vendor_data->num++;
+    }
+
+    if (idx_filter != -1) {
+        policy = &dm->m_policy[idx_filter];
+        em_printfout(" Vendor Policy cfg TLV for client filters policy ");
+
+        data = reinterpret_cast<em_vendor_data_t *> (cursor);
+        data->attr_id = vendor_ext_attr_id_policy_cfg_client_filter;
+        memcpy(data->vendor_data, reinterpret_cast<unsigned char *> (&policy->m_policy.client_filters), sizeof(em_client_filters_cfg_t));
+        
+        len += sizeof(data->attr_id) + sizeof(em_client_filters_cfg_t);
+        cursor += sizeof(data->attr_id) + sizeof(em_client_filters_cfg_t);
+
+        vendor_data->num++;
+    }
+    em_printfout("vendor data attr cnt: %zu", vendor_data->num);
+    em_printfout("client filter Policy cfg TLV length: %zu and total payload: %zu", len, (cursor - payload_start));
 
     return static_cast<short> (len);
 }
 
 int em_policy_cfg_t::send_policy_cfg_request_msg()
 {
-    unsigned char buff[MAX_EM_BUFF_SZ];
+    unsigned char buff[MAX_EM_BUFF_SZ] = {0};
     char *errors[EM_MAX_TLV_MEMBERS] = {0};
     unsigned short  msg_type = em_msg_type_map_policy_config_req;
     size_t len = 0;
@@ -450,9 +528,9 @@ int em_policy_cfg_t::send_policy_cfg_request_msg()
     tmp += (sizeof(em_tlv_t) + static_cast<size_t> (sz));
     len += (sizeof(em_tlv_t) + static_cast<size_t> (sz));
 
-    //em_tlv_vendor_plolicy_cfg
+    //em_tlv_type_vendor_policy_cfg_sta_marker
     tlv = reinterpret_cast<em_tlv_t *> (tmp);
-    tlv->type = em_tlv_vendor_plolicy_cfg;
+    tlv->type = em_tlv_type_vendor_specific;
     sz = create_vendor_policy_cfg_tlv(tlv->value);
     tlv->len = htons(static_cast<short unsigned int> (sz));
 
@@ -489,12 +567,14 @@ int em_policy_cfg_t::handle_policy_cfg_req(unsigned char *buff, unsigned int len
     unsigned int tlv_len;
     size_t data_len = 0;
     unsigned int i = 0;
-    mac_addr_str_t mac_str;
+    unsigned char *cursor = NULL;
+    em_vendor_data_t *data = NULL;
 
     memset(&policy, 0, sizeof(em_policy_cfg_t));
 
     tlv = reinterpret_cast<em_tlv_t *> (buff + sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t));
     tlv_len = len - static_cast<unsigned int> (sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t));
+    em_printfout("Handling Policy Cfg Request Msg len=%d, tlv_len=%d", len, tlv_len);
 
     while ((tlv->type != em_tlv_type_eom) && (tlv_len > 0)) {
         if (tlv->type == em_tlv_type_steering_policy) {
@@ -530,9 +610,7 @@ int em_policy_cfg_t::handle_policy_cfg_req(unsigned char *buff, unsigned int len
             for(i = 0; i < metrics->radios_num; i++) {
                 em_metric_rprt_policy_radio_t *radio = &metrics->radios[i];
                 memcpy(&policy.metrics_policy.radios[i], radio, sizeof(em_metric_rprt_policy_radio_t));
-
-                dm_easy_mesh_t::macbytes_to_string(policy.metrics_policy.radios[i].ruid, mac_str);
-                printf("%s:%d Recvd policy for radio %s\n", __func__, __LINE__, mac_str);
+                em_printfout("Recvd policy for radio %s", util::mac_to_string(policy.metrics_policy.radios[i].ruid).c_str());
             }
             data_len += (metrics->radios_num * sizeof(em_metric_rprt_policy_radio_t));
         } else if (tlv->type == em_tlv_type_dflt_8021q_settings) {
@@ -561,17 +639,53 @@ int em_policy_cfg_t::handle_policy_cfg_req(unsigned char *buff, unsigned int len
                         tmp += sizeof(unsigned short);
                         data_len += sizeof(unsigned short);
 		            }
-                    em_printfout(" Recvd Traffic Separation policy SSID='%s' Len=%u, VLAN=%u ",policy.traffic_separation_policy.ssids[i].ssid , ssid_len ,policy.traffic_separation_policy.ssids[i].vlan_id);
+                    em_printfout("Recvd Traffic Separation policy SSID='%s' Len=%u, VLAN=%u ",policy.traffic_separation_policy.ssids[i].ssid , ssid_len ,policy.traffic_separation_policy.ssids[i].vlan_id);
                 }
 	        }
         } else if (tlv->type == em_tlv_type_channel_scan_rprt_policy) {
         } else if (tlv->type == em_tlv_type_unsucc_assoc_policy) {
         } else if (tlv->type == em_tlv_type_backhaul_bss_conf) {
         } else if (tlv->type == em_tlv_type_qos_mgmt_policy){
-        } else if (tlv->type == em_tlv_vendor_plolicy_cfg) {
-            em_vendor_policy_t *vendor = reinterpret_cast<em_vendor_policy_t *> (tlv->value);
-            snprintf(policy.vendor_policy.managed_client_marker, sizeof(em_string_t), "%s", vendor->managed_client_marker);
-            data_len += sizeof(em_vendor_policy_t);
+        } else if (tlv->type == em_tlv_type_vendor_specific) {
+            em_vendor_specific_t *vendor_tlv = reinterpret_cast<em_vendor_specific_t *> (tlv->value);
+            em_printfout("Recvd vendor tlv, num: %d and tlv->len:%d", vendor_tlv->num, htons(tlv->len));
+            if ((vendor_tlv->num <= 0) || (htons(tlv->len) == 0)) {
+                break;
+            }
+
+            cursor = reinterpret_cast<unsigned char *> (vendor_tlv->data);
+            for(int i = 0; i < vendor_tlv->num; i++)
+            {
+                data = reinterpret_cast<em_vendor_data_t *> (cursor);
+                em_printfout("vendor attr id is: %d", data->attr_id);
+                if (data->attr_id == vendor_ext_attr_id_policy_sta_marker) {
+                    strncpy(policy.vendor_policy.managed_client_marker, reinterpret_cast<const char *>(data->vendor_data), strlen(reinterpret_cast<char *> (data->vendor_data)) + 1);
+                    em_printfout(" Recvd sta marker: %s", policy.vendor_policy.managed_client_marker);
+                    cursor += sizeof(data->attr_id) + strlen(reinterpret_cast<char *> (data->vendor_data)) + 1;
+                } else if (data->attr_id == vendor_ext_attr_id_policy_alarm) {
+                    em_link_stats_alarm_cfg_t *vendor = reinterpret_cast<em_link_stats_alarm_cfg_t *> (data->vendor_data);
+                    memcpy(&policy.vendor_policy.link_stats_alarm_policy_cfg, vendor, sizeof(em_link_stats_alarm_cfg_t));
+
+                    em_printfout(" Recvd link stats alarm cfg, collection_start_time : %s ", policy.vendor_policy.link_stats_alarm_policy_cfg.collection_start_time);
+                    em_printfout(" Recvd link stats alarm cfg, reporting_interval : %d ", policy.vendor_policy.link_stats_alarm_policy_cfg.reporting_interval);
+                    em_printfout(" Recvd link stats alarm cfg, link_quality_threshold : %f ", policy.vendor_policy.link_stats_alarm_policy_cfg.link_quality_threshold);
+
+                    cursor += sizeof(data->attr_id) + sizeof(em_link_stats_alarm_cfg_t);
+                } else if (data->attr_id == vendor_ext_attr_id_policy_cfg_client_filter) {
+                    em_client_filters_cfg_t *vendor = reinterpret_cast<em_client_filters_cfg_t *> (data->vendor_data);
+                    memcpy(&policy.vendor_policy.client_filters_policy_cfg, vendor, sizeof(em_client_filters_cfg_t));
+
+                    em_printfout(" Recvd client filters cfg, sta_mac : %s ", util::mac_to_string(
+                        policy.vendor_policy.client_filters_policy_cfg.sta_mac).c_str());
+                    em_printfout(" Recvd client filters cfg, consec_alarm_thres_cnt : %d ", policy.vendor_policy.client_filters_policy_cfg.consec_alarm_thres_cnt);
+                    em_printfout(" Recvd client filters cfg, collect_duration : %s ", policy.vendor_policy.client_filters_policy_cfg.collect_duration);
+
+                    cursor += sizeof(data->attr_id) + sizeof(em_client_filters_cfg_t);
+                } else {
+                    em_printfout(" Unknown vendor attr id: %d ", data->attr_id);
+                    break;
+                }
+            }
         }
 
         tlv_len -= static_cast<unsigned int> (sizeof(em_tlv_t) + static_cast<size_t> (htons(tlv->len)));
@@ -579,8 +693,6 @@ int em_policy_cfg_t::handle_policy_cfg_req(unsigned char *buff, unsigned int len
     }
 
     get_mgr()->io_process(em_bus_event_type_set_policy, reinterpret_cast<unsigned char *> (&policy), sizeof(policy));
-    //send_associated_link_metrics_response(sta);
-    //set_state(em_state_agent_configured);
 
     return 0;
 }
@@ -609,8 +721,64 @@ void em_policy_cfg_t::process_ctrl_state()
 {
     switch (get_state()) {
 		case em_state_ctrl_set_policy_pending:
-        	send_policy_cfg_request_msg();
-			set_state(em_state_ctrl_configured);
+            {
+                em_printfout("Processing set policy pending state for radio %s", util::mac_to_string(get_radio_interface_mac()).c_str());
+                std::vector<em_t *> em_radios;
+                dm_easy_mesh_t *dm = get_data_model();
+
+                get_mgr()->get_all_em_for_al_mac(dm->get_agent_al_interface_mac(), em_radios);
+                for (auto &em : em_radios)
+                {
+                    // Check for null em pointer in vector
+                    if (em == NULL) {
+                        em_printfout("Warning: Null em pointer in vector, skipping");
+                        continue;
+                    }
+                    // Check if radio is in set policy pending, if not log and return without sending policy config request 
+                    // check state of em is configured, to handle the case where radio exchange autoconfiguration messages multiple times
+                    // resulting the queue of multiple em_cmd_type_em_config.
+                    if (em->get_state() != em_state_ctrl_set_policy_pending && em->get_state() != em_state_ctrl_configured)
+                    {
+                        em_printfout("radio %s is in state:%s, not in em_state_ctrl_set_policy_pending or not in em_state_ctrl_configured",
+                                     util::mac_to_string(em->get_radio_interface_mac()).c_str(),  em_t::state_2_str(em->get_state()));
+                        em_radios.clear();
+                        return;
+                    }
+                }
+                // If all radios or some radios in set policy pending state, send policy config request on one of them,
+                // ignore sending policy config request on other radios
+                if (!em_radios.empty())
+                {
+                    em_printfout("Sending the Policy config request message to agent al_mac:%s on radio: %s",
+                                 util::mac_to_string(dm->get_agent_al_interface_mac()).c_str(),
+                                 util::mac_to_string(get_radio_interface_mac()).c_str());
+                    em_t *al_em = get_mgr()->get_al_node();
+
+                    // Send policy config request and check for errors
+                    int send_result = send_policy_cfg_request_msg();
+                    if (send_result < 0) {
+                        em_printfout("Error: Failed to send policy config request message");
+                        return;
+                    } else {
+                        em_printfout("Policy config request sent successfully, bytes: %d", send_result);
+                    }
+
+                    // Set state for AL node to configured
+                    al_em->set_state(em_state_ctrl_configured);
+                    em_printfout("Set AL node state to configured");
+                    // Set state for all radios to Configured state
+                    for (auto &em : em_radios)
+                    {
+                        if (em != NULL)
+                        {
+                            em->set_state(em_state_ctrl_configured);
+                            em_printfout("Set radio %s state to configured",
+                                        util::mac_to_string(em->get_radio_interface_mac()).c_str());
+                        }
+                    }
+                }
+                em_radios.clear();
+            }
             break;
 
         default:

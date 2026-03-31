@@ -106,13 +106,13 @@ public:
     bus_error_t wf6ap_tget(char* event_name, raw_data_t* p_data);
     static bus_error_t wf6ap_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
     static bus_error_t wf6ap_tget_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
-    static bus_error_t wf6ap_tget_params(dm_easy_mesh_t *dm, const char *root, em_radio_info_t *ri, bus_data_prop_t **property, int idx);
+    static bus_error_t wf6ap_tget_params(dm_easy_mesh_t *dm, const char *root, em_radio_info_t *ri, bus_data_prop_t **property, unsigned int idx);
 
     bus_error_t wf7ap_get(char* event_name, raw_data_t* p_data);
     bus_error_t wf7ap_tget(char* event_name, raw_data_t* p_data);
     static bus_error_t wf7ap_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
     static bus_error_t wf7ap_tget_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
-    static bus_error_t wf7ap_tget_params(dm_easy_mesh_t *dm, const char *root, em_radio_info_t *ri, bus_data_prop_t **property, int idx);
+    static bus_error_t wf7ap_tget_params(dm_easy_mesh_t *dm, const char *root, em_radio_info_t *ri, bus_data_prop_t **property, unsigned int idx);
 
     dm_op_class_t* get_dm_curop(dm_easy_mesh_t *dm, dm_radio_t *radio, int instance);
     bus_error_t curops_get(char* event_name, raw_data_t* p_data);
@@ -140,6 +140,28 @@ public:
     static bus_error_t affap_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
     static bus_error_t affap_tget_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
     static bus_error_t affap_tget_params(dm_easy_mesh_t *dm, const char *root, em_ap_mld_info_t *ami, bus_data_prop_t **property);
+
+    dm_assoc_sta_mld_t *get_dm_sta_mld(dm_easy_mesh_t *dm, em_ap_mld_info_t *ami, char *instance, bool is_num);
+    bus_error_t stamld_get(char *event_name, raw_data_t *p_data);
+    bus_error_t stamld_tget(char *event_name, raw_data_t *p_data);
+    bus_error_t wifi7caps_get(char *event_name, raw_data_t *p_data);
+    bus_error_t stamldcfg_get(char *event_name, raw_data_t *p_data);
+    static bus_error_t stamld_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t stamld_tget_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t stamld_tget_params(dm_easy_mesh_t *dm, const char *root, em_ap_mld_info_t *ami, bus_data_prop_t **property);
+    static bus_error_t wifi7caps_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t stamldcfg_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+
+    bus_error_t affsta_get(char *event_name, raw_data_t *p_data);
+    bus_error_t affsta_tget(char *event_name, raw_data_t *p_data);
+    static bus_error_t affsta_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t affsta_tget_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t affsta_tget_params(dm_easy_mesh_t *dm, const char *root, em_assoc_sta_mld_info_t *smi, bus_data_prop_t **property);
+
+    bus_error_t bstamld_get(char *event_name, raw_data_t *p_data);
+    bus_error_t bstacfg_get(char *event_name, raw_data_t *p_data);
+    static bus_error_t bstamld_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
+    static bus_error_t bstacfg_get_inner(char *event_name, raw_data_t *p_data, bus_user_data_t *user_data);
 
 private:
     db_client_t m_db_client;
@@ -733,6 +755,8 @@ public:
 	 * @param[in] parent The JSON object containing the station configurations.
 	 * @param[in] key The key used to identify the specific station configuration.
 	 * @param[in] reason The reason for retrieving the station list, default is none.
+	 * @param[in] subdoc buffer pointer to the structure where the sub-document information
+	 * will be stored.
 	 *
 	 * @returns int Status code of the operation.
 	 * @retval 0 on success.
@@ -740,7 +764,7 @@ public:
 	 *
 	 * @note Ensure that the JSON object and key are valid before calling this function.
 	 */
-	int get_sta_config(cJSON *parent, char *key, em_get_sta_list_reason_t reason = em_get_sta_list_reason_none);
+	int get_sta_config(cJSON *parent, char *key, em_get_sta_list_reason_t reason = em_get_sta_list_reason_none, char *data = NULL);
     
 	/**!
 	 * @brief Retrieves the BSS configuration from a JSON object.

@@ -114,13 +114,13 @@ class em_agent_t : public em_mgr_t {
 	void handle_1s_tick();
     
 	/**!
-	 * @brief Handles the 500ms tick event.
+	 * @brief Handles the 250ms tick event.
 	 *
-	 * This function is called every 500 milliseconds to perform periodic tasks.
+	 * This function is called every 250 milliseconds to perform periodic tasks.
 	 *
 	 * @note Ensure that this function is called at the correct interval to maintain system timing.
 	 */
-	void handle_500ms_tick();
+	void handle_250ms_tick();
 
     
 	/**!
@@ -289,6 +289,8 @@ class em_agent_t : public em_mgr_t {
 	 * @note Ensure that the event structure is properly initialized before calling this function.
 	 */
 	void handle_ap_metrics_report(em_bus_event_t *evt);
+
+	void handle_link_stats_report(em_bus_event_t *evt);
 
 	/**
 	 * @brief Send an action frame
@@ -1001,8 +1003,8 @@ public:
 	 *
 	 * @note Ensure that the data pointer is valid before accessing its contents.
 	 */
-	static int ap_metrics_report_cb(char *event_name, raw_data_t *data, void *userData);
-    
+	static int report_cb(char *event_name, raw_data_t *data, void *userData);
+
 	/**!
 	 * @brief Retrieves the associated data for the given input.
 	 *

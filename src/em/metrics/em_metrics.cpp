@@ -45,6 +45,8 @@
 #include "em.h"
 #include "em_cmd_exec.h"
 
+static     const unsigned char em_vendor_oui[EM_VENDOR_OUI_SIZE] = {0xd8, 0x9c, 0x8e};
+
 int em_metrics_t::handle_assoc_sta_link_metrics_tlv(unsigned char *buff)
 {
     em_assoc_sta_link_metrics_t	*sta_metrics;
@@ -102,27 +104,14 @@ int em_metrics_t::handle_assoc_sta_ext_link_metrics_tlv(unsigned char *buff)
 
 int em_metrics_t::handle_assoc_sta_vendor_link_metrics_tlv(unsigned char *buff, unsigned int len)
 {
+    em_vendor_specific_t *vendor_metrics = reinterpret_cast<em_vendor_specific_t *> (buff);
+    em_vendor_data_t *vendor_data = vendor_metrics->data;
     em_assoc_sta_vendor_link_metrics_t *sta_metrics;
-    //em_assoc_vendor_link_metrics_t *metrics;
     dm_sta_t *sta = NULL;
-    //unsigned int i;
     dm_easy_mesh_t  *dm;
 
     dm = get_data_model();
-
-    sta_metrics = reinterpret_cast<em_assoc_sta_vendor_link_metrics_t *> (buff);
-    /* for (i = 0; i < sta_metrics->num_bssids; i++) {
-        metrics = &sta_metrics->assoc_vendor_link_metrics[i];
-        sta = dm->find_sta(sta_metrics->sta_mac, sta_metrics->bssid);
-        if (sta == NULL) {
-            continue;
-        }
-
-        sta->m_sta_info.pkts_rx = metrics->packets_received;
-        sta->m_sta_info.pkts_tx = metrics->packets_sent;
-        sta->m_sta_info.bytes_rx = metrics->bytes_received;
-        sta->m_sta_info.bytes_tx = metrics->bytes_sent;
-    } */
+    sta_metrics = reinterpret_cast<em_assoc_sta_vendor_link_metrics_t *> (vendor_data->vendor_data);
 
     sta = dm->find_sta(sta_metrics->sta_mac, sta_metrics->bssid);
     if (sta != NULL && len >= sizeof(em_assoc_sta_vendor_link_metrics_t)) {
@@ -216,7 +205,7 @@ int em_metrics_t::handle_associated_sta_link_metrics_resp(unsigned char *buff, u
     tmp_len = base_len;
 
     while ((tlv->type != em_tlv_type_eom) && (tmp_len > 0)) {
-        if (tlv->type == em_tlv_type_vendor_sta_metrics) {
+        if (tlv->type == em_tlv_type_vendor_specific) {
             handle_assoc_sta_vendor_link_metrics_tlv(tlv->value, ntohs(tlv->len));
         }
 
@@ -282,7 +271,7 @@ int em_metrics_t::handle_beacon_metrics_response(unsigned char *buff, unsigned i
     tmp_len = len - static_cast<unsigned int> (sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t));
     while ((tlv->type != em_tlv_type_eom) && (tmp_len > 0)) {
         if (tlv->type == em_tlv_type_bcon_metric_rsp) {
-            report_len = ntohs(tlv->len) - 8;
+            report_len = static_cast<unsigned int>(ntohs(tlv->len) - 8);
             response = reinterpret_cast<em_beacon_metrics_resp_t *> (tlv->value);
             break;
         }
@@ -329,7 +318,6 @@ int em_metrics_t::handle_ap_metrics_tlv(unsigned char *buff, bssid_t get_bssid)
     if (bss != NULL) {
         bss->numberofsta = htons(ap_metrics->num_sta);
         dm_easy_mesh_t::macbytes_to_string(ap_metrics->bssid, bss_str);
-        printf("%s:%d Num of stas associated to BSS[%s] is: %d\n", __func__, __LINE__, bss_str, bss->numberofsta);
     } else {
         dm_easy_mesh_t::macbytes_to_string(ap_metrics->bssid, bss_str);
         printf("%s:%d BSS not found: %s\n", __func__, __LINE__, bss_str);
@@ -343,15 +331,14 @@ int em_metrics_t::handle_assoc_sta_traffic_stats(unsigned char *buff, bssid_t bs
     em_assoc_sta_traffic_stats_t	*sta_metrics;
     dm_sta_t *sta;
     dm_easy_mesh_t  *dm;
-    mac_addr_str_t sta_str;
 
     dm = get_data_model();
     sta_metrics = reinterpret_cast<em_assoc_sta_traffic_stats_t *> (buff);
 
-    dm_easy_mesh_t::macbytes_to_string(sta_metrics->sta_mac, sta_str);
     sta = dm->find_sta(sta_metrics->sta_mac, bssid);
     if (sta == NULL) {
-        printf("%s:%d: sta not found: %s\n", __func__, __LINE__, sta_str);
+        em_printfout("sta not found: %s for bssid: %s", util::mac_to_string(sta_metrics->sta_mac).c_str(),
+            util::mac_to_string(bssid).c_str());
         return -1;
     }
 
@@ -366,6 +353,94 @@ int em_metrics_t::handle_assoc_sta_traffic_stats(unsigned char *buff, bssid_t bs
     return 0;
 }
 
+int em_metrics_t::handle_link_stats_alarm_rprt_tlv(unsigned char *buff, size_t len)
+{
+    em_link_report_t *link_report;
+    dm_sta_t *sta;
+    dm_easy_mesh_t  *dm;
+    mac_addr_str_t sta_str;
+    unsigned char *tmp = buff;
+    size_t alarm_offset = 0;
+
+    dm = get_data_model();
+
+    em_vendor_specific_t *vendor_data = reinterpret_cast<em_vendor_specific_t *> (tmp);
+    em_printfout("vendor_data->num count [%d]", vendor_data->num);
+
+    em_vendor_data_t *vendor_data_ptr = vendor_data->data;
+    em_printfout("vendor_data->attri [%d]", vendor_data_ptr->attr_id);
+
+    if (vendor_data_ptr->attr_id != vendor_ext_attr_id_link_report) {
+        return 0;
+    }
+
+    tmp += sizeof(vendor_data->num) + EM_VENDOR_OUI_SIZE + sizeof(vendor_data_ptr->attr_id);
+    len -= static_cast<unsigned int>( sizeof(vendor_data->num) + EM_VENDOR_OUI_SIZE ) + sizeof(vendor_data_ptr->attr_id);
+
+    link_report = reinterpret_cast<em_link_report_t *> (tmp);
+
+    while (link_report != NULL && len > 0) {
+        alarm_offset = offsetof(em_link_report_t, alarm_sample);
+
+        if (len < alarm_offset) {
+            em_printfout("Invalid alarm report length");
+            break;
+        }
+        em_printfout("length : %d", len);
+
+        dm_easy_mesh_t::macbytes_to_string(link_report->sta_mac, sta_str);
+        sta = dm->get_first_sta(link_report->sta_mac);
+        while (sta != NULL) {
+            if (memcmp(sta->m_sta_info.id, link_report->sta_mac, sizeof(mac_address_t)) == 0) {
+                break;
+            }
+            sta = dm->get_next_sta(link_report->sta_mac, sta);
+        }
+
+        if(sta == NULL)
+        {
+            em_printfout("sta[%s] not found", sta_str);
+            //todo: handle this case, shouldnot return, should goto next after incrementing
+            return -1;
+        }
+
+        em_printfout("sta mac : %s", sta_str);
+        memcpy(sta->m_sta_info.link_stats_report.reporting_timestamp, link_report->reporting_timestamp, 31);
+        sta->m_sta_info.link_stats_report.reporting_timestamp[31] = '\0';
+        sta->m_sta_info.link_stats_report.link_quality_threshold = link_report->link_quality_threshold;
+        sta->m_sta_info.link_stats_report.alarm_triggered = link_report->alarm_triggered;
+
+        em_printfout("\t\t===>>> Link Stats Alarm Report rcvd for STA [%s] <<<===", sta_str);
+        em_printfout("\t\tReporting Timestamp: %s", sta->m_sta_info.link_stats_report.reporting_timestamp);
+        em_printfout("\t\tLink Quality Threshold: %.2f", sta->m_sta_info.link_stats_report.link_quality_threshold);
+        em_printfout("\t\tAlarm Triggered: %s", sta->m_sta_info.link_stats_report.alarm_triggered ? "True" : "False");
+
+        sta->m_sta_info.link_stats_report.sample_count = link_report->sample_count;
+        em_printfout("    Number of Samples: %d", sta->m_sta_info.link_stats_report.sample_count);
+
+        for (int i = 0; i < link_report->sample_count; i++) {
+            memcpy(&sta->m_sta_info.link_stats_report.alarm_sample[i],
+                &link_report->alarm_sample[i],
+                sizeof(em_alarm_samples_t));
+
+            em_printfout("\t\treporting_time: %s", sta->m_sta_info.link_stats_report.alarm_sample[i].reporting_time);
+            em_printfout("\t\tLink Quality score: %.2f", sta->m_sta_info.link_stats_report.alarm_sample[i].link_quality_score);
+            em_printfout("\t\tSNR: %f dB", sta->m_sta_info.link_stats_report.alarm_sample[i].snr);
+            em_printfout("\t\tPER Rate: %f ", sta->m_sta_info.link_stats_report.alarm_sample[i].per);
+            em_printfout("\t\tPHY Rate: %f ", sta->m_sta_info.link_stats_report.alarm_sample[i].phy);
+        }
+
+        tmp += alarm_offset + (static_cast<size_t>(link_report->sample_count) * sizeof(em_alarm_samples_t));
+        len -= alarm_offset + (static_cast<size_t>(link_report->sample_count) * sizeof(em_alarm_samples_t));
+
+        link_report = reinterpret_cast<em_link_report_t *> (tmp);
+    }
+
+    //form json and send to cli/orchestrator
+    get_mgr()->io_process(em_bus_event_type_link_quality_report, reinterpret_cast<char *>(dm->get_device_info()->id.dev_mac), sizeof(mac_address_t));
+
+    return 0;
+}
 
 int em_metrics_t::handle_ap_metrics_response(unsigned char *buff, unsigned int len)
 {
@@ -421,6 +496,7 @@ int em_metrics_t::handle_ap_metrics_response(unsigned char *buff, unsigned int l
 
     while ((tlv->type != em_tlv_type_eom) && (tmp_len > 0)) {
         if (tlv->type == em_tlv_type_assoc_sta_traffic_sts) {
+            //todo: bug fix to find sta
             handle_assoc_sta_traffic_stats(tlv->value, bssid);
         }
         tmp_len -= (sizeof(em_tlv_t) + static_cast<size_t> (htons(tlv->len)));
@@ -463,7 +539,7 @@ int em_metrics_t::handle_ap_metrics_response(unsigned char *buff, unsigned int l
     tmp_len = base_len;
 
     while ((tlv->type != em_tlv_type_eom) && (tmp_len > 0)) {
-        if (tlv->type == em_tlv_type_vendor_sta_metrics) {
+        if (tlv->type == em_tlv_type_vendor_specific) {
             handle_assoc_sta_vendor_link_metrics_tlv(tlv->value, ntohs(tlv->len));
         }
         tmp_len -= (sizeof(em_tlv_t) + static_cast<size_t> (htons(tlv->len)));
@@ -472,6 +548,34 @@ int em_metrics_t::handle_ap_metrics_response(unsigned char *buff, unsigned int l
 
     dm->set_db_cfg_param(db_cfg_type_sta_metrics_update, "");
     set_state(em_state_ctrl_configured);
+
+    return 0;
+}
+
+int em_metrics_t::handle_vendor_msg(unsigned char *buff, unsigned int len)
+{
+    em_tlv_t *tlv, *tlv_start;
+    size_t tmp_len, base_len;
+    char *errors[EM_MAX_TLV_MEMBERS] = {0};
+
+    if (em_msg_t(em_msg_type_topo_vendor, get_profile_type(), buff, len).validate(errors) == 0) {
+        printf("%s:%d: Vendor msg validation failed\n", __func__, __LINE__);
+        return -1;
+    }
+
+    tlv_start =  reinterpret_cast<em_tlv_t *> (buff + sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t));
+    base_len = static_cast<size_t> (len) - (sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t));
+
+    tlv = tlv_start;
+    tmp_len = base_len;
+
+    while ((tlv->type != em_tlv_type_eom) && (tmp_len > 0)) {
+        if (tlv->type == em_tlv_type_vendor_specific) {
+            handle_link_stats_alarm_rprt_tlv(tlv->value, ntohs(tlv->len));
+        }
+        tmp_len -= (sizeof(em_tlv_t) + static_cast<size_t> (htons(tlv->len)));
+        tlv = reinterpret_cast<em_tlv_t *> (reinterpret_cast<unsigned char *> (tlv) + sizeof(em_tlv_t) + htons(tlv->len));
+    }
 
     return 0;
 }
@@ -656,7 +760,7 @@ int em_metrics_t::send_associated_link_metrics_response(mac_address_t sta_mac, u
 
     //assoc vendor link metrics
     tlv = reinterpret_cast<em_tlv_t *> (tmp);
-    tlv->type = em_tlv_type_vendor_sta_metrics;
+    tlv->type = em_tlv_type_vendor_specific;
     sz = create_assoc_vendor_sta_link_metrics_tlv(tlv->value, sta_mac, sta);
     tlv->len = htons(static_cast<short unsigned int> (sz));
 
@@ -836,6 +940,77 @@ int em_metrics_t::send_beacon_metrics_response()
     return static_cast<int> (len);
 }
 
+int em_metrics_t::send_link_quality_report()
+{
+    unsigned char buff[MAX_EM_BUFF_SZ] = {0};
+    char *errors[EM_MAX_TLV_MEMBERS] = {0};
+    unsigned short  msg_type = em_msg_type_topo_vendor;
+    size_t len = 0;
+    em_cmdu_t *cmdu;
+    em_tlv_t *tlv;
+    unsigned char *tmp = buff;
+    short sz = 0;
+    unsigned short type = htons(ETH_P_1905);
+    dm_easy_mesh_t *dm = get_data_model();
+    mac_addr_str_t mac_str;
+
+    memcpy(tmp, dm->get_ctl_mac(), sizeof(mac_address_t));
+    tmp += sizeof(mac_address_t);
+    len += sizeof(mac_address_t);
+
+    memcpy(tmp, dm->get_agent_al_interface_mac(), sizeof(mac_address_t));
+    tmp += sizeof(mac_address_t);
+    len += sizeof(mac_address_t);
+
+    memcpy(tmp, reinterpret_cast<unsigned char *> (&type), sizeof(unsigned short));
+    tmp += sizeof(unsigned short);
+    len += sizeof(unsigned short);
+
+    cmdu = reinterpret_cast<em_cmdu_t *> (tmp);
+
+    memset(tmp, 0, sizeof(em_cmdu_t));
+    cmdu->type = htons(msg_type);
+    cmdu->id = htons(get_mgr()->get_next_msg_id());
+    cmdu->last_frag_ind = 1;
+
+    tmp += sizeof(em_cmdu_t);
+    len += sizeof(em_cmdu_t);
+
+    //Add Link Stats alarm tlv
+    tlv = reinterpret_cast<em_tlv_t *> (tmp);
+    tlv->type = em_tlv_type_vendor_specific;
+
+    //todo: add type id for future usage
+    sz = create_link_stats_alarm_tlv(tlv->value);
+    tlv->len = htons(static_cast<unsigned short> (sz));
+    tmp += (sizeof(em_tlv_t) + static_cast<size_t> (sz));
+    len += (sizeof(em_tlv_t) + static_cast<size_t> (sz));
+
+    // End of message
+    tlv = reinterpret_cast<em_tlv_t *> (tmp);
+    tlv->type = em_tlv_type_eom;
+    tlv->len = 0;
+
+    tmp += (sizeof(em_tlv_t));
+    len += (sizeof(em_tlv_t));
+
+    if (em_msg_t(em_msg_type_topo_vendor, em_profile_type_2, buff, static_cast<unsigned int> (len)).validate(errors) == 0) {
+        em_printfout("Link Stats msg validation failed for %s", mac_str);
+        //return -1;
+    }
+
+    if (send_frame(buff, static_cast<unsigned int> (len))  < 0) {
+        em_printfout("Link Stats msg send failed, error:%d", errno);
+        return -1;
+    }
+
+    em_printfout("Link Stats msg send success");
+
+    set_state(em_state_agent_configured);
+
+    return static_cast<int> (len);
+}
+
 int em_metrics_t::send_ap_metrics_response()
 {
     unsigned char buff[MAX_EM_BUFF_SZ] = {0};
@@ -848,7 +1023,6 @@ int em_metrics_t::send_ap_metrics_response()
     short sz = 0;
     unsigned short type = htons(ETH_P_1905);
     dm_easy_mesh_t *dm = get_data_model();
-    mac_addr_str_t mac_str;
     dm_sta_t *sta;
     int bss_index = 0;
 
@@ -877,10 +1051,6 @@ int em_metrics_t::send_ap_metrics_response()
     //AP Metrics Response 17.1.17
     //AP Metrics TLV (17.2.22)
     for (bss_index = 0; bss_index < static_cast<int>(dm->m_num_bss); bss_index++) {
-        if (memcmp(dm->m_bss[bss_index].m_bss_info.ruid.mac,
-            get_current_cmd()->get_param()->u.ap_metrics_params.ruid, sizeof(mac_addr_t)) != 0) {
-            continue;
-        }
 
         tlv = reinterpret_cast<em_tlv_t *> (tmp);
         tlv->type = em_tlv_type_ap_metrics;
@@ -894,15 +1064,6 @@ int em_metrics_t::send_ap_metrics_response()
         tlv = reinterpret_cast<em_tlv_t *> (tmp);
         tlv->type = em_tlv_type_ap_ext_metric;
         sz = create_ap_ext_metrics_tlv(tlv->value, dm->m_bss[bss_index]);
-        tlv->len =  htons(static_cast<unsigned short> (sz));
-
-        tmp += (sizeof(em_tlv_t) + static_cast<size_t> (sz));
-        len += (sizeof(em_tlv_t) + static_cast<size_t> (sz));
-
-        //Radio Metrics TLV (17.2.60)
-        tlv = reinterpret_cast<em_tlv_t *> (tmp);
-        tlv->type = em_tlv_type_radio_metric;
-        sz = create_radio_metrics_tlv(tlv->value);
         tlv->len =  htons(static_cast<unsigned short> (sz));
 
         tmp += (sizeof(em_tlv_t) + static_cast<size_t> (sz));
@@ -954,7 +1115,7 @@ int em_metrics_t::send_ap_metrics_response()
 
             //assoc vendor link metrics
             tlv = reinterpret_cast<em_tlv_t *> (tmp);
-            tlv->type = em_tlv_type_vendor_sta_metrics;
+            tlv->type = em_tlv_type_vendor_specific;
             sz = create_assoc_vendor_sta_link_metrics_tlv(tlv->value, sta->m_sta_info.id, sta);
             tlv->len = htons(static_cast<short unsigned int> (sz));
 
@@ -963,6 +1124,17 @@ int em_metrics_t::send_ap_metrics_response()
 
             sta = reinterpret_cast<dm_sta_t *> (hash_map_get_next(dm->m_sta_map, sta));
         }
+    }
+
+    for (int i = 0; i < get_current_cmd()->get_param()->u.ap_metrics_params.num_radios; i++) {
+        //Radio Metrics TLV (17.2.60)
+        tlv = reinterpret_cast<em_tlv_t *> (tmp);
+        tlv->type = em_tlv_type_radio_metric;
+        sz = create_radio_metrics_tlv(tlv->value, i);
+        tlv->len =  htons(static_cast<unsigned short> (sz));
+
+        tmp += (sizeof(em_tlv_t) + static_cast<size_t> (sz));
+        len += (sizeof(em_tlv_t) + static_cast<size_t> (sz));
     }
 
     // End of message
@@ -974,18 +1146,18 @@ int em_metrics_t::send_ap_metrics_response()
     len += (sizeof(em_tlv_t));
 
     if (em_msg_t(em_msg_type_ap_metrics_rsp, em_profile_type_2, buff, static_cast<unsigned int> (len)).validate(errors) == 0) {
-        printf("%s:%d: AP Metrics Response validation failed for %s\n", __func__, __LINE__, mac_str);
+        em_printfout("AP Metrics Response validation failed for agent:%s, still sending",
+            util::mac_to_string(dm->get_agent_al_interface_mac()).c_str());
         //return -1;
     }
 
     if (send_frame(buff, static_cast<unsigned int> (len))  < 0) {
-        printf("%s:%d: AP Metrics Response send failed, error:%d\n", __func__, __LINE__, errno);
+        em_printfout("AP Metrics Response send failed, error:%d\n", errno);
         return -1;
     }
 
-    printf("%s:%d: AP Metrics Response send success\n", __func__, __LINE__);
-
     set_state(em_state_agent_configured);
+    em_printfout("AP Metrics Response sent for %u BSSs, %d Radios", dm->m_num_bss, get_current_cmd()->get_param()->u.ap_metrics_params.num_radios);
 
     return static_cast<int> (len);
 }
@@ -1085,8 +1257,20 @@ short em_metrics_t::create_assoc_ext_sta_link_metrics_tlv(unsigned char *buff, m
 short em_metrics_t::create_assoc_vendor_sta_link_metrics_tlv(unsigned char *buff, mac_address_t sta_mac, const dm_sta_t *const sta)
 {
     size_t len = 0;
-    em_assoc_sta_vendor_link_metrics_t *assoc_sta_metrics = reinterpret_cast<em_assoc_sta_vendor_link_metrics_t*> (buff);
-    //em_assoc_vendor_link_metrics_t *metrics;
+    em_assoc_sta_vendor_link_metrics_t *assoc_sta_metrics = NULL;
+    em_vendor_specific_t *vendor_metrics = reinterpret_cast<em_vendor_specific_t *> (buff);
+    em_vendor_data_t *vendor_data = vendor_metrics->data;
+
+    assoc_sta_metrics = reinterpret_cast<em_assoc_sta_vendor_link_metrics_t *> (vendor_data->vendor_data);
+
+    memcpy(vendor_metrics->vendor_oui, em_vendor_oui, sizeof(vendor_metrics->vendor_oui));
+    len += sizeof(vendor_metrics->vendor_oui);
+
+    vendor_metrics->num = 1;
+    len += sizeof(vendor_metrics->num);
+
+    vendor_data->attr_id = vendor_ext_attr_id_client_type;
+    len += sizeof(vendor_data->attr_id);
 
     if (sta == NULL) {
         memcpy(&assoc_sta_metrics->sta_mac, &sta_mac, sizeof(assoc_sta_metrics->sta_mac));
@@ -1097,7 +1281,6 @@ short em_metrics_t::create_assoc_vendor_sta_link_metrics_tlv(unsigned char *buff
         return static_cast<short> (len);
     }
     else {
-        //metrics = &assoc_sta_metrics->assoc_vendor_link_metrics[0];
         if ((memcmp(sta->m_sta_info.id, sta_mac, sizeof(mac_address_t)) == 0)) {
             memcpy(assoc_sta_metrics->sta_mac, sta->m_sta_info.id, sizeof(assoc_sta_metrics->sta_mac));
             len += sizeof(assoc_sta_metrics->sta_mac);
@@ -1107,24 +1290,6 @@ short em_metrics_t::create_assoc_vendor_sta_link_metrics_tlv(unsigned char *buff
 
             strncpy(assoc_sta_metrics->sta_client_type, sta->m_sta_info.sta_client_type, sizeof(assoc_sta_metrics->sta_client_type));
             len += sizeof(assoc_sta_metrics->sta_client_type);
-
-            /*assoc_sta_metrics->num_bssids = static_cast<unsigned char> (dm->get_num_bss_for_associated_sta(sta_mac));
-            len += sizeof(assoc_sta_metrics->num_bssids);
-
-            memcpy(metrics->bssid, sta->m_sta_info.bssid, sizeof(metrics->bssid));
-            len += sizeof(metrics->bssid);
-
-            metrics->packets_received = sta->m_sta_info.pkts_rx;
-            len += sizeof(metrics->packets_received);
-
-            metrics->packets_sent = sta->m_sta_info.pkts_tx;
-            len += sizeof(metrics->packets_sent);
-
-            metrics->bytes_received = sta->m_sta_info.bytes_rx;
-            len += sizeof(metrics->bytes_received);
-
-            metrics->bytes_sent = sta->m_sta_info.bytes_tx;
-            len += sizeof(metrics->bytes_sent);*/
         }
     }
     return static_cast<short> (len);
@@ -1251,14 +1416,18 @@ short em_metrics_t::create_beacon_metrics_response_tlv(unsigned char *buff)
 short em_metrics_t::create_ap_metrics_tlv(unsigned char *buff, dm_bss_t &dm_bss)
 {
     size_t len = 0;
-    mac_addr_str_t rad_str, bss_str;
     em_ap_metric_t *ap_metrics = reinterpret_cast<em_ap_metric_t *> (buff);
+    int i = 0;
 
-    dm_easy_mesh_t::macbytes_to_string(dm_bss.m_bss_info.ruid.mac, rad_str);
+ 
+    for(i = 0; i < get_current_cmd()->get_param()->u.ap_metrics_params.num_radios; i++) {
+        if (memcmp(dm_bss.m_bss_info.ruid.mac,
+            get_current_cmd()->get_param()->u.ap_metrics_params.ruid[i], sizeof(mac_addr_t)) == 0) {
+            break;
+        }
+    }
     if (memcmp(dm_bss.m_bss_info.ruid.mac, 
-        get_current_cmd()->get_param()->u.ap_metrics_params.ruid, sizeof(mac_addr_t)) == 0) {
-        dm_easy_mesh_t::macbytes_to_string(dm_bss.m_bss_info.bssid.mac, bss_str);
-        printf("%s:%d Creating ap response for bssid: %s\n", __func__, __LINE__, bss_str);
+        get_current_cmd()->get_param()->u.ap_metrics_params.ruid[i], sizeof(mac_addr_t)) == 0) {
 
         memcpy(ap_metrics->bssid, dm_bss.m_bss_info.bssid.mac, sizeof(mac_address_t));
         len += static_cast<size_t> (sizeof(mac_address_t));
@@ -1284,12 +1453,18 @@ short em_metrics_t::create_ap_metrics_tlv(unsigned char *buff, dm_bss_t &dm_bss)
 short em_metrics_t::create_ap_ext_metrics_tlv(unsigned char *buff, dm_bss_t &dm_bss)
 {
     size_t len = 0;
-    mac_addr_str_t rad_str;
     em_ap_ext_metric_t *ap_ext_metrics = reinterpret_cast<em_ap_ext_metric_t *> (buff);
+    int i = 0;
 
-    dm_easy_mesh_t::macbytes_to_string(dm_bss.m_bss_info.ruid.mac, rad_str);
+    for(i = 0; i < get_current_cmd()->get_param()->u.ap_metrics_params.num_radios; i++) {
+        if (memcmp(dm_bss.m_bss_info.ruid.mac,
+            get_current_cmd()->get_param()->u.ap_metrics_params.ruid[i], sizeof(mac_addr_t)) == 0) {
+            break;
+        }
+    }
+
     if (memcmp(dm_bss.m_bss_info.ruid.mac,
-        get_current_cmd()->get_param()->u.ap_metrics_params.ruid, sizeof(mac_addr_t)) == 0) {
+        get_current_cmd()->get_param()->u.ap_metrics_params.ruid[i], sizeof(mac_addr_t)) == 0) {
         memcpy(ap_ext_metrics->bssid, dm_bss.m_bss_info.bssid.mac, sizeof(mac_address_t));
     }
 
@@ -1298,14 +1473,14 @@ short em_metrics_t::create_ap_ext_metrics_tlv(unsigned char *buff, dm_bss_t &dm_
     return static_cast<short> (len);
 }
 
-short em_metrics_t::create_radio_metrics_tlv(unsigned char *buff)
+short em_metrics_t::create_radio_metrics_tlv(unsigned char *buff, int index)
 {
     size_t len = 0;
     dm_easy_mesh_t *dm = get_data_model();
     em_radio_metric_t *radio_metric = reinterpret_cast<em_radio_metric_t *> (buff);
     dm_radio_t *radio = NULL;
 
-    radio = dm->get_radio(get_current_cmd()->get_param()->u.ap_metrics_params.ruid);
+    radio = dm->get_radio(get_current_cmd()->get_param()->u.ap_metrics_params.ruid[index]);
     memcpy(radio_metric->ruid, radio->get_radio_info()->intf.mac, sizeof(mac_address_t));
 
     len = static_cast<size_t> (sizeof(em_radio_metric_t));
@@ -1356,6 +1531,75 @@ short em_metrics_t::create_assoc_wifi6_sta_sta_report_tlv(unsigned char *buff, c
     return static_cast<short> (len);
 }
 
+short em_metrics_t::create_link_stats_alarm_tlv(unsigned char *buff)
+{
+    size_t len = 0;
+    em_link_report_t *link_stats;
+    unsigned char *tmp = buff;
+    dm_sta_t *sta;
+    dm_easy_mesh_t  *dm = get_current_cmd()->get_data_model();
+    size_t alarm_offset = offsetof(em_link_report_t, alarm_sample);
+    size_t record_len = 0;
+
+    em_vendor_specific_t *vendor_data = reinterpret_cast<em_vendor_specific_t *> (buff);
+    memcpy(reinterpret_cast<char *> (vendor_data->vendor_oui), em_vendor_oui, EM_VENDOR_OUI_SIZE);
+
+    vendor_data->num = 1;
+
+    tmp += sizeof(vendor_data->num) + EM_VENDOR_OUI_SIZE;
+    len += sizeof(vendor_data->num) + EM_VENDOR_OUI_SIZE;
+
+    em_vendor_data_t *data = vendor_data->data;
+
+    data->attr_id = static_cast<unsigned char> (vendor_ext_attr_id_link_report);
+    len += sizeof(data->attr_id);
+    tmp += sizeof(data->attr_id);
+
+    sta = static_cast<dm_sta_t *> (hash_map_get_first(dm->m_sta_map));
+    while (sta != NULL) {
+        link_stats = reinterpret_cast<em_link_report_t *>(tmp);
+        memcpy(link_stats->sta_mac, sta->m_sta_info.id, sizeof(mac_address_t));
+        strncpy(reinterpret_cast<char*>(link_stats->reporting_timestamp),
+            reinterpret_cast<const char*>(sta->m_sta_info.link_stats_report.reporting_timestamp), 32);
+
+        link_stats->link_quality_threshold = sta->m_sta_info.link_stats_report.link_quality_threshold;
+        link_stats->alarm_triggered = sta->m_sta_info.link_stats_report.alarm_triggered;
+        link_stats->sample_count = sta->m_sta_info.link_stats_report.sample_count;
+
+        em_printfout("   sta mac : %s", util::mac_to_string(link_stats->sta_mac).c_str());
+        em_printfout("   reporting_timestamp : %s", link_stats->reporting_timestamp);
+        em_printfout("   link_quality_threshold : %.2f", link_stats->link_quality_threshold);
+        em_printfout("   alarm_triggered : %d", link_stats->alarm_triggered);
+        em_printfout("create_link_stats_alarm_tlv: sample_count=%d", link_stats->sample_count);
+
+        for (int j = 0; j < link_stats->sample_count; j++) {
+            link_stats->alarm_sample[j].link_quality_score = sta->m_sta_info.link_stats_report.alarm_sample[j].link_quality_score;
+            strncpy(reinterpret_cast<char*>(link_stats->alarm_sample[j].reporting_time),
+                reinterpret_cast<const char*>(sta->m_sta_info.link_stats_report.alarm_sample[j].reporting_time), 32);
+            link_stats->alarm_sample[j].snr = sta->m_sta_info.link_stats_report.alarm_sample[j].snr;
+            link_stats->alarm_sample[j].per = sta->m_sta_info.link_stats_report.alarm_sample[j].per;
+            link_stats->alarm_sample[j].phy = sta->m_sta_info.link_stats_report.alarm_sample[j].phy;
+
+            em_printfout("   Sample %d:", j + 1);
+            em_printfout("       link_quality_score : %.2f", link_stats->alarm_sample[j].link_quality_score);
+            em_printfout("       reporting_time : %s", link_stats->alarm_sample[j].reporting_time);
+            em_printfout("       snr : %f", link_stats->alarm_sample[j].snr);
+            em_printfout("       per : %f", link_stats->alarm_sample[j].per);
+            em_printfout("       phy : %f", link_stats->alarm_sample[j].phy);
+        }
+
+        record_len = alarm_offset + (static_cast<size_t>(link_stats->sample_count) * sizeof(em_alarm_samples_t));
+        len += record_len;
+        tmp += record_len;
+        em_printfout("framed report len: %d", len);
+        sta = static_cast<dm_sta_t *> (hash_map_get_next(dm->m_sta_map, sta));
+    }
+
+    em_printfout("create_link_stats_alarm_tlv done of len: %d", len);
+
+    return static_cast<short> (len);
+}
+
 short em_metrics_t::create_error_code_tlv(unsigned char *buff, mac_address_t sta, bool sta_found)
 {
     short len = 0;
@@ -1402,6 +1646,9 @@ void em_metrics_t::process_msg(unsigned char *data, unsigned int len)
         case em_msg_type_ap_metrics_rsp:
             handle_ap_metrics_response(data, len);
             break;
+        case em_msg_type_topo_vendor:
+            handle_vendor_msg(data, len);
+            break;
 
         default:
             break;
@@ -1433,6 +1680,10 @@ void em_metrics_t::process_agent_state()
 
         case em_state_agent_ap_metrics_pending:
             send_ap_metrics_response();
+            break;
+
+        case em_state_agent_link_quality_report_pending:
+            send_link_quality_report();
             break;
 
         default:
